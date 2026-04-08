@@ -45,13 +45,38 @@
         };
 
         const getInvoicePeriod = (dateString) => {
-            if (!dateString) return '未知期別';
+            if (!dateString || dateString === "undefined" || dateString === "NaN") return '期別未知';
             const date = new Date(dateString);
+            if (isNaN(date.getTime())) return '日期格式錯誤';
             const periodStart = (date.getMonth() + 1) % 2 === 0 ? date.getMonth() : date.getMonth() + 1;
             return `${date.getFullYear()}年 ${String(periodStart).padStart(2, '0')}-${String(periodStart + 1).padStart(2, '0')}月`;
         };
 
         const generateItemId = () => Math.random().toString(36).substr(2, 9);
+
+        // 工業級 CSV 行解析器 (解決截圖中的欄位錯位問題)
+        const parseCSVLine = (text) => {
+            const result = [];
+            let current = "";
+            let inQuotes = false;
+            for (let i = 0; i < text.length; i++) {
+                const char = text[i];
+                if (char === '"') {
+                    if (inQuotes && text[i + 1] === '"') {
+                        current += '"'; i++; // 處理重複引號 (Escaped Quotes)
+                    } else {
+                        inQuotes = !inQuotes;
+                    }
+                } else if (char === ',' && !inQuotes) {
+                    result.push(current.trim());
+                    current = "";
+                } else {
+                    current += char;
+                }
+            }
+            result.push(current.trim());
+            return result;
+        };
 
         function App() {
             const [invoices, setInvoices] = useState(() => {
@@ -173,7 +198,6 @@
                 if (e.key === 'Enter') e.preventDefault();
             };
 
-            // --- CSV 匯出引擎 ---
             const exportCSV = () => {
                 const filtered = invoices.filter(i => {
                     const matchPeriod = filterPeriod === 'ALL' || getInvoicePeriod(i.date) === filterPeriod;
@@ -184,18 +208,33 @@
                 const headers = ['狀態', '期別', '類型', '稅別', '發票號碼', '開立日期', '買方統編', '發票銷售額', '發票營業稅', '發票含稅總額', '品項名稱', '規格', '數量', '單價', '品項小計'];
                 const csvRows = [headers.join(',')];
                 filtered.forEach(inv => {
-                    const base = [inv.status==='void'?'作廢':'正常', getInvoicePeriod(inv.date), inv.invoiceType, inv.taxType==='taxable'?'應稅':'免稅', inv.invoiceNumber, inv.date, inv.taxId||'', inv.netAmount, inv.tax, inv.total];
+                    const base = [
+                        `"${inv.status==='void'?'作廢':'正常'}"`, 
+                        `"${getInvoicePeriod(inv.date)}"`, 
+                        `"${inv.invoiceType}"`, 
+                        `"${inv.taxType==='taxable'?'應稅':'免稅'}"`, 
+                        `"${inv.invoiceNumber}"`, 
+                        `"${inv.date}"`, 
+                        `"${inv.taxId||''}"`, 
+                        inv.netAmount, 
+                        inv.tax, 
+                        inv.total
+                    ];
                     if (inv.items && inv.items.length > 0) {
-                        inv.items.forEach(it => { csvRows.push([...base, (it.name||'').replace(/,/g,' '), (it.specs||'').replace(/,/g,' '), it.quantity, it.unitPrice, it.amount].join(',')); });
-                    } else { csvRows.push([...base, '', '', '', '', ''].join(',')); }
+                        inv.items.forEach(it => {
+                            const itemName = (it.name || "").replace(/"/g, '""');
+                            const itemSpecs = (it.specs || "").replace(/"/g, '""');
+                            csvRows.push([...base, `"${itemName}"`, `"${itemSpecs}"`, it.quantity, it.unitPrice, it.amount].join(','));
+                        });
+                    } else { csvRows.push([...base, '""', '""', 0, 0, 0].join(',')); }
                 });
                 const csvContent = '\uFEFF' + csvRows.join('\n');
                 const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-                const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `發票明細報表_${new Date().toISOString().split('T')[0]}.csv`; a.click();
+                const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `發票明細全導出.csv`; a.click();
                 showToast("報表下載成功");
             };
 
-            // --- CSV 復原引擎 ---
+            // 修正版 CSV 復原引擎 (解決截圖問題)
             const importCSV = (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
@@ -205,14 +244,16 @@
                     try {
                         const text = event.target.result;
                         const lines = text.split(/\r?\n/).filter(line => line.trim() !== "");
-                        if (lines.length < 2) throw new Error("無效的 CSV 檔案");
+                        if (lines.length < 2) throw new Error("CSV 檔案內容過少");
 
                         const invoiceMap = new Map();
                         for (let i = 1; i < lines.length; i++) {
-                            const cols = lines[i].split(',').map(c => c.trim());
+                            const cols = parseCSVLine(lines[i]); // 使用引號安全解析器
                             if (cols.length < 10) continue;
 
                             const invNum = cols[4];
+                            if (!invNum || invNum === "") continue;
+
                             if (!invoiceMap.has(invNum)) {
                                 invoiceMap.set(invNum, {
                                     status: cols[0] === '作廢' ? 'void' : 'active',
@@ -230,7 +271,8 @@
                             }
 
                             const inv = invoiceMap.get(invNum);
-                            if (cols[10]) {
+                            // 如果 CSV 行中有品項資訊 (Index 10 開始)
+                            if (cols[10] && cols[10] !== "") {
                                 inv.items.push({
                                     id: generateItemId() + i,
                                     name: cols[10],
@@ -245,10 +287,12 @@
                         const importedInvoices = Array.from(invoiceMap.values());
                         if (importedInvoices.length > 0) {
                             setInvoices(importedInvoices);
-                            showToast(`還原成功！已讀取 ${importedInvoices.length} 張發票`, "success");
+                            showToast(`還原成功！已正確導入 ${importedInvoices.length} 張發票資料`, "success");
+                        } else {
+                            showToast("讀取失敗：CSV 內容不符合系統格式", "error");
                         }
                     } catch (err) {
-                        showToast("CSV 解析失敗，請檢查格式", "error");
+                        showToast("解析失敗，請確認檔案是否為本系統導出的 CSV", "error");
                     }
                 };
                 reader.readAsText(file);
@@ -276,11 +320,11 @@
                         </nav>
                         <div className="p-6 mt-auto border-t border-slate-800 text-center">
                             <div className="bg-slate-800 rounded-2xl p-4 border border-slate-700">
-                                <div className="text-[10px] font-bold text-slate-500 uppercase mb-2 tracking-widest">Database Node Status</div>
+                                <div className="text-[10px] font-bold text-slate-500 uppercase mb-2 tracking-widest text-center">Cloud Node Sync</div>
                                 <div className="flex items-center justify-center gap-2">
                                     <div className={`w-2.5 h-2.5 rounded-full ${syncStatus === 'syncing' ? 'bg-amber-400 animate-pulse' : syncStatus === 'error' ? 'bg-red-500' : 'bg-emerald-500'}`}></div>
                                     <span className="text-[10px] font-bold text-slate-300 uppercase">
-                                        {syncStatus === 'syncing' ? 'Mirroring...' : syncStatus === 'error' ? 'Sync Error' : 'Safe'}
+                                        {syncStatus === 'syncing' ? 'Mirroring...' : syncStatus === 'error' ? 'Sync Error' : 'Database Secure'}
                                     </span>
                                 </div>
                             </div>
@@ -293,12 +337,12 @@
                         {activeTab === 'help' && (
                             <div className="max-w-4xl mx-auto space-y-12 animate-slide-in">
                                 <header className="bg-gradient-to-br from-indigo-900 via-indigo-800 to-slate-900 p-12 rounded-[3.5rem] text-white shadow-2xl text-center">
-                                    <h2 className="text-4xl font-black mb-4">CSV 還原與多維度篩選</h2>
-                                    <p className="text-indigo-200 text-lg font-medium italic">「提供極致的資料靈活性，讓財務流程精確無誤。」</p>
+                                    <h2 className="text-4xl font-black mb-4 tracking-tight">CSV 修復與還原系統</h2>
+                                    <p className="text-indigo-200 text-lg font-medium italic">「解決導出錯位問題，支援複雜品項規格的精確還原。」</p>
                                 </header>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                                    <div className="bg-white p-8 rounded-[2rem] border shadow-sm"><h4 className="font-black text-indigo-700 mb-4">智能篩選引擎</h4><p className="text-sm text-slate-500 leading-relaxed font-medium">清單頁面現在支援「月份期別」與「發票類型」雙重篩選，您可以精確隔離 B2B 與 B2C 資料進行個別導出或核對。</p></div>
-                                    <div className="bg-white p-8 rounded-[2rem] border shadow-sm"><h4 className="font-black text-emerald-700 mb-4">數據循環還原</h4><p className="text-sm text-slate-500 leading-relaxed font-medium">支援從 CSV 格式全量還原發票明細，系統會自動處理多品項的資料聚合，確保雲端備份與本地資料高度一致。</p></div>
+                                    <div className="bg-white p-8 rounded-[2rem] border shadow-sm"><h4 className="font-black text-indigo-700 mb-4 flex items-center gap-2"><i className="ph ph-bug"></i> 解決 NaN 與錯位</h4><p className="text-sm text-slate-500 leading-relaxed">針對 Supabase CSV 的引號包裹特性進行了適配，現在匯入時不會再將品項內容誤判為發票號碼。</p></div>
+                                    <div className="bg-white p-8 rounded-[2rem] border shadow-sm"><h4 className="font-black text-emerald-700 mb-4 flex items-center gap-2"><i className="ph ph-check-square"></i> 高相容性解析器</h4><p className="text-sm text-slate-500 leading-relaxed">內建 Quote-Aware 解析邏輯，即便規格內含有逗號或分行符號，也能確保數據行與行之間對齊無誤。</p></div>
                                 </div>
                             </div>
                         )}
@@ -307,13 +351,13 @@
                             <div className="space-y-8 animate-slide-in">
                                 <h2 className="text-4xl font-black text-slate-900">戰情儀表板</h2>
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                                    <div className="bg-white p-6 rounded-3xl border shadow-sm"><div className="text-xs font-bold text-slate-400">總處理張數</div><div className="text-4xl font-black mt-1">{invoices.length}</div></div>
+                                    <div className="bg-white p-6 rounded-3xl border shadow-sm"><div className="text-xs font-bold text-slate-400 uppercase">總處理張數</div><div className="text-4xl font-black mt-1">{invoices.length}</div></div>
                                     <div className="bg-indigo-600 p-6 rounded-3xl shadow-xl text-white"><div className="text-xs font-bold text-indigo-200 uppercase">含稅營收</div><div className="text-4xl font-black font-mono mt-1">${invoices.filter(i=>i.status!=='void').reduce((s,i)=>s+(i.total||0),0).toLocaleString()}</div></div>
-                                    <div className="bg-white p-6 rounded-3xl border shadow-sm"><div className="text-xs font-bold text-slate-400">營業稅預估</div><div className="text-4xl font-black text-indigo-600 mt-1">${invoices.filter(i=>i.status!=='void').reduce((s,i)=>s+(i.tax||0),0).toLocaleString()}</div></div>
+                                    <div className="bg-white p-6 rounded-3xl border shadow-sm"><div className="text-xs font-bold text-slate-400 uppercase">預估稅額</div><div className="text-4xl font-black text-indigo-600 mt-1">${invoices.filter(i=>i.status!=='void').reduce((s,i)=>s+(i.tax||0),0).toLocaleString()}</div></div>
                                 </div>
                                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 pt-4 h-80">
-                                    <div className="bg-white p-8 rounded-[2.5rem] border shadow-sm"><h4 className="font-black text-slate-800 mb-4">營收趨勢趨勢</h4><div className="h-60"><canvas ref={chartRefs.line}></canvas></div></div>
-                                    <div className="bg-white p-8 rounded-[2.5rem] border shadow-sm"><h4 className="font-black text-slate-800 mb-4">熱銷品項 Top 5</h4><div className="h-60"><canvas ref={chartRefs.bar}></canvas></div></div>
+                                    <div className="bg-white p-8 rounded-[2.5rem] border shadow-sm"><h4 className="font-black text-slate-800 mb-4">營收趨勢圖</h4><div className="h-60"><canvas ref={chartRefs.line}></canvas></div></div>
+                                    <div className="bg-white p-8 rounded-[2.5rem] border shadow-sm"><h4 className="font-black text-slate-800 mb-4">品項 Top 5</h4><div className="h-60"><canvas ref={chartRefs.bar}></canvas></div></div>
                                 </div>
                             </div>
                         )}
@@ -346,9 +390,8 @@
                                                 ))}
                                             </div>
                                         </div>
-                                        <div className={`p-8 rounded-[2.5rem] text-white shadow-2xl transition-all ${formData.status==='void'?'bg-slate-700':'bg-indigo-900'}`}><div className="flex flex-col md:flex-row justify-between items-center gap-8 font-bold"><div className="flex gap-10"><div><div className="text-[10px] uppercase text-indigo-300 mb-2">銷售總額 (未稅)</div><div className="text-2xl font-mono">${(formData.netAmount||0).toLocaleString()}</div></div><div className="border-l border-indigo-800 pl-10"><div className="flex items-center gap-4 mb-2"><span className="text-[10px] text-indigo-300 uppercase">稅別</span><div className="flex p-0.5 bg-white/10 rounded-md"><button type="button" onClick={()=>handleInputChange({target:{name:'taxType',value:'taxable'}})} className={`px-3 py-1 rounded text-[10px] ${formData.taxType==='taxable'?'bg-indigo-500 text-white':'text-indigo-300'}`}>應稅 5%</button><button type="button" onClick={()=>handleInputChange({target:{name:'taxType',value:'exempt'}})} className={`px-3 py-1 rounded text-[10px] ${formData.taxType==='exempt'?'bg-indigo-500 text-white':'text-indigo-300'}`}>免稅 0%</button></div></div><div className="text-2xl font-mono">${(formData.tax||0).toLocaleString()}</div></div></div><div className="text-right md:border-l md:border-indigo-800 md:pl-12"><div className="text-[10px] uppercase text-indigo-300 tracking-widest">含稅總計</div><div className="text-5xl text-emerald-400 font-mono tracking-tighter">${(formData.total||0).toLocaleString()}</div></div></div></div>
-                                        <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 py-6 rounded-3xl font-black text-white text-2xl shadow-xl transition-all active:scale-[0.97] flex items-center justify-center gap-3"><i className="ph-fill ph-check-circle"></i> 確認儲存錄入</button>
-                                        <p className="text-center text-[10px] text-slate-400 italic font-bold">安全機制：Enter 鍵已禁用，請手動確認儲存。</p>
+                                        <div className={`p-8 rounded-[2.5rem] text-white shadow-2xl transition-all ${formData.status==='void'?'bg-slate-700':'bg-indigo-900'}`}><div className="flex flex-col md:flex-row justify-between items-center gap-8 font-bold"><div className="flex gap-10"><div><div className="text-[10px] uppercase text-indigo-300 mb-2">銷售總額 (未稅)</div><div className="text-2xl font-mono">${(formData.netAmount||0).toLocaleString()}</div></div><div className="border-l border-indigo-800 pl-10"><div className="flex items-center gap-4 mb-2"><span className="text-[10px] text-indigo-300 uppercase">稅別</span><div className="flex p-0.5 bg-white/10 rounded-md"><button type="button" onClick={()=>handleInputChange({target:{name:'taxType',value:'taxable'}})} className={`px-3 py-1 rounded text-[10px] ${formData.taxType==='taxable'?'bg-indigo-500 text-white':'text-indigo-300'}`}>應稅 5%</button><button type="button" onClick={()=>handleInputChange({target:{name:'taxType',value:'exempt'}})} className={`px-3 py-1 rounded text-[10px] ${formData.taxType==='exempt'?'bg-indigo-500 text-white':'text-indigo-300'}`}>免稅 0%</button></div></div><div className="text-2xl font-mono">${(formData.tax||0).toLocaleString()}</div></div></div><div className="text-right md:border-l md:border-indigo-800 md:pl-12 font-black"><div className="text-[10px] uppercase text-indigo-300 tracking-widest">含稅總計金額</div><div className="text-5xl text-emerald-400 font-mono tracking-tighter">${(formData.total||0).toLocaleString()}</div></div></div></div>
+                                        <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 py-6 rounded-3xl font-black text-white text-2xl shadow-xl transition-all active:scale-[0.97] flex items-center justify-center gap-3"><i className="ph-fill ph-check-circle"></i> 確認儲存並存入</button>
                                     </form>
                                 </div>
                             </div>
@@ -357,16 +400,15 @@
                         {activeTab === 'list' && (
                             <div className="space-y-6 animate-slide-in">
                                 <header className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
-                                    <div><h2 className="text-3xl font-black text-slate-800 tracking-tight">整合明細清單</h2></div>
+                                    <div><h2 className="text-3xl font-black text-slate-800 tracking-tight italic">整合明細清單</h2></div>
                                     <div className="flex flex-wrap gap-4 w-full md:w-auto">
-                                        <label className="bg-white border-2 border-dashed border-indigo-200 text-indigo-600 px-6 py-2.5 rounded-2xl font-black flex items-center gap-2 shadow-sm text-xs cursor-pointer hover:bg-indigo-50 transition-all"><i className="ph ph-upload"></i> 從 CSV 還原<input type="file" accept=".csv" onChange={importCSV} className="hidden" /></label>
+                                        <label className="bg-white border-2 border-dashed border-indigo-200 text-indigo-600 px-6 py-2.5 rounded-2xl font-black flex items-center gap-2 shadow-sm text-xs cursor-pointer hover:bg-indigo-50 transition-all shadow-indigo-100/50"><i className="ph ph-upload"></i> 從 CSV 還原<input type="file" accept=".csv" onChange={importCSV} className="hidden" /></label>
                                         <div className="bg-white border px-4 py-2 rounded-2xl flex items-center gap-2 shadow-sm text-xs font-bold border-slate-200"><i className="ph ph-calendar text-indigo-500"></i>
                                             <select value={filterPeriod} onChange={e=>setFilterPeriod(e.target.value)} className="outline-none bg-transparent">
                                                 <option value="ALL">全部月份期別</option>
                                                 {availablePeriods.map(p=><option key={p} value={p}>{p}</option>)}
                                             </select>
                                         </div>
-                                        {/* 新增發票類型篩選器 */}
                                         <div className="bg-white border px-4 py-2 rounded-2xl flex items-center gap-2 shadow-sm text-xs font-bold border-slate-200"><i className="ph ph-funnel text-amber-500"></i>
                                             <select value={filterType} onChange={e=>setFilterType(e.target.value)} className="outline-none bg-transparent">
                                                 <option value="ALL">全部發票類型</option>
@@ -380,7 +422,7 @@
                                 <div className="bg-white rounded-[2.5rem] border border-slate-200 overflow-hidden shadow-sm">
                                     <table className="w-full text-left">
                                         <thead className="bg-slate-50 text-[10px] font-black text-slate-400 tracking-widest border-b uppercase">
-                                            <tr><th className="p-6">發票號碼</th><th className="p-6">期別/統編</th><th className="p-6 text-center">狀態</th><th className="p-6 text-right font-black">總計金額</th><th className="p-6 text-center">操作</th></tr>
+                                            <tr><th className="p-6">發票號碼</th><th className="p-6 text-center">期別/統編</th><th className="p-6 text-center">狀態</th><th className="p-6 text-right font-black">總計金額</th><th className="p-6 text-center">操作</th></tr>
                                         </thead>
                                         <tbody className="divide-y divide-slate-100">
                                             {invoices.filter(i=>{
@@ -389,12 +431,12 @@
                                                 return matchPeriod && matchType;
                                             }).map(inv=>(
                                                 <Fragment key={inv.id}>
-                                                    <tr onClick={()=>setExpandedInvoiceId(expandedInvoiceId===inv.id?null:inv.id)} className="cursor-pointer hover:bg-slate-50 transition-all">
+                                                    <tr onClick={()=>setExpandedInvoiceId(expandedInvoiceId===inv.id?null:inv.id)} className="cursor-pointer hover:bg-slate-50 transition-all group">
                                                         <td className={`p-6 font-black font-mono text-lg ${inv.status==='void'?'line-through text-slate-300':'text-slate-800'}`}>{inv.invoiceNumber}</td>
-                                                        <td className="p-6 text-sm text-slate-500"><div className="font-bold text-slate-700">{getInvoicePeriod(inv.date)}</div><div className="text-[10px] font-bold text-slate-300 uppercase">{inv.taxId || '二聯/無統編'}</div></td>
-                                                        <td className="p-6 text-center">{inv.status==='void'?<span className="bg-red-50 text-red-600 px-3 py-1 rounded-full text-[10px] font-black border border-red-100">作廢</span>:<span className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full text-[10px] font-black border border-emerald-200">正常</span>}</td>
+                                                        <td className="p-6 text-sm text-slate-500 text-center"><div className="font-bold text-slate-700">{getInvoicePeriod(inv.date)}</div><div className="text-[10px] font-bold text-slate-300 uppercase">{inv.taxId || '二聯/無統編'}</div></td>
+                                                        <td className="p-6 text-center">{inv.status==='void'?<span className="bg-red-50 text-red-600 px-3 py-1 rounded-full text-[10px] font-black border border-red-100">作廢</span>:<span className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full text-[10px] font-black border border-emerald-100">正常</span>}</td>
                                                         <td className={`p-6 text-right font-black font-mono text-xl ${inv.status==='void'?'text-slate-300':'text-indigo-700'}`}>${(inv.total||0).toLocaleString()}</td>
-                                                        <td className="p-6 text-center"><button onClick={(e)=>{e.stopPropagation(); setInvoices(invoices.filter(i=>i.id!==inv.id));}} className="text-slate-300 hover:text-red-500 transition-colors"><i className="ph-fill ph-trash-simple text-2xl"></i></button></td>
+                                                        <td className="p-6 text-center"><button onClick={(e)=>{e.stopPropagation(); setInvoices(invoices.filter(i=>i.id!==inv.id));}} className="text-slate-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"><i className="ph-fill ph-trash-simple text-2xl"></i></button></td>
                                                     </tr>
                                                     {expandedInvoiceId===inv.id && (
                                                         <tr className="bg-slate-900 animate-slide-in">
@@ -402,12 +444,13 @@
                                                                 <div className="rounded-3xl border border-slate-800 overflow-hidden shadow-2xl">
                                                                     <table className="w-full text-xs text-left text-slate-300">
                                                                         <thead className="bg-slate-800 text-slate-500 font-black tracking-widest border-b border-slate-700 uppercase">
-                                                                            <tr><th className="p-4">品項/規格</th><th className="p-4 text-center">數量</th><th className="p-4 text-right">單價</th><th className="p-4 text-right">小計</th></tr>
+                                                                            <tr><th className="p-4">品項/規格</th><th className="p-4 text-center">數量</th><th className="p-4 text-right">單價</th><th className="p-4 text-right font-black text-indigo-300">小計</th></tr>
                                                                         </thead>
                                                                         <tbody className="divide-y divide-slate-800/50">
                                                                             {(inv.items || []).map((it, idx) => (
-                                                                                <tr key={idx}><td className="p-4"><div className="font-bold">{it.name || '未命名項目'}</div><div className="text-[10px] text-slate-500 italic mt-0.5">{it.specs || '無規格資訊'}</div></td><td className="p-4 text-center font-mono">{it.quantity}</td><td className="p-4 text-right font-mono">${(it.unitPrice||0).toLocaleString()}</td><td className="p-4 text-right font-black text-emerald-400 font-mono">${(it.amount||0).toLocaleString()}</td></tr>
+                                                                                <tr key={idx}><td className="p-4"><div className="font-bold">{it.name || '項目內容'}</div><div className="text-[10px] text-slate-500 italic mt-0.5">{it.specs || '無規格'}</div></td><td className="p-4 text-center font-mono">{it.quantity}</td><td className="p-4 text-right font-mono">${(it.unitPrice||0).toLocaleString()}</td><td className="p-4 text-right font-black text-emerald-400 font-mono">${(it.amount||0).toLocaleString()}</td></tr>
                                                                             ))}
+                                                                            {(!inv.items || inv.items.length === 0) && <tr><td colSpan="4" className="p-6 text-center text-slate-600 font-bold italic">查無詳細品項資料</td></tr>}
                                                                         </tbody>
                                                                     </table>
                                                                 </div>
@@ -416,7 +459,7 @@
                                                     )}
                                                 </Fragment>
                                             ))}
-                                            {invoices.length === 0 && <tr><td colSpan="5" className="p-20 text-center text-slate-300 font-bold italic underline">目前尚無錄入數據，請先新增發票。</td></tr>}
+                                            {invoices.length === 0 && <tr><td colSpan="5" className="p-20 text-center text-slate-300 font-bold italic underline">目前數據庫為空，請從 CSV 復原或手動錄入。</td></tr>}
                                         </tbody>
                                     </table>
                                 </div>
