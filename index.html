@@ -8,7 +8,7 @@
     <!-- 引入 Tailwind CSS 引擎 -->
     <script src="https://cdn.tailwindcss.com"></script>
     
-    <!-- 引入 Phosphor 企業級圖示庫 -->
+    <!-- 引入 Phosphor 圖示庫 -->
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
     
     <!-- 引入 React, ReactDOM 與 Chart.js -->
@@ -40,8 +40,9 @@
         const { useState, useEffect, useRef, useMemo, Fragment } = React;
 
         const COLORS = ['#4f46e5', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
-        const apiKey = ""; // 若有 Gemini API Key 請填寫於此
+        const apiKey = ""; // Gemini API Key 預留位
 
+        // 台灣發票期別邏輯：每兩個月為一期
         const getInvoicePeriod = (dateString) => {
             if (!dateString) return '未知期別';
             const date = new Date(dateString);
@@ -55,28 +56,24 @@
 
         const generateItemId = () => Math.random().toString(36).substr(2, 9);
 
-        // 預留辨識函數結構，防止呼叫時出錯
+        // API 呼叫結構預留
         const callGeminiVision = async (base64Data) => {
             if (!apiKey) throw new Error("Missing API Key");
             const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
             const prompt = `辨識發票內容並回傳 JSON：{"invoiceNumber": "XX-12345678", "date": "YYYY-MM-DD", "invoiceType": "三聯式/二聯式", "taxId": "8碼", "netAmount": 數字, "tax": 數字, "total": 數字, "items": [{"name": "品名", "quantity": 數量, "unitPrice": 單價, "amount": 小計}]}`;
             const payload = { contents: [{ role: "user", parts: [{ text: prompt }, { inlineData: { mimeType: "image/png", data: base64Data } }] }], generationConfig: { responseMimeType: "application/json" } };
-            
             const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
             const result = await response.json();
             return JSON.parse(result.candidates?.[0]?.content?.parts?.[0]?.text);
         };
 
         function App() {
-            // 安全讀取 LocalStorage
+            // 本地儲存讀取
             const [invoices, setInvoices] = useState(() => {
                 try {
                     const saved = localStorage.getItem('nextgen_invoices');
                     return saved ? JSON.parse(saved) : [];
-                } catch (e) {
-                    console.error("Failed to parse local storage", e);
-                    return [];
-                }
+                } catch (e) { return []; }
             });
             
             const [activeTab, setActiveTab] = useState('dashboard');
@@ -85,6 +82,10 @@
             const [isCameraOpen, setIsCameraOpen] = useState(false);
             const [isAnalyzing, setIsAnalyzing] = useState(false);
             
+            // 篩選器狀態
+            const [filterPeriod, setFilterPeriod] = useState('ALL');
+            const [filterType, setFilterType] = useState('ALL');
+
             const videoRef = useRef(null);
             const canvasRef = useRef(null);
             const barChartRef = useRef(null);
@@ -105,358 +106,251 @@
                 status: 'active'
             });
 
-            // 資料自動存檔
             useEffect(() => {
                 localStorage.setItem('nextgen_invoices', JSON.stringify(invoices));
             }, [invoices]);
 
-            // --- 儀表板數據處理 ---
-            const activeInvoices = useMemo(() => invoices.filter(inv => inv.status !== 'void'), [invoices]);
-            const voidCount = invoices.filter(inv => inv.status === 'void').length;
+            // --- 數據處理 ---
+            const availablePeriods = useMemo(() => {
+                const periods = invoices.map(inv => getInvoicePeriod(inv.date));
+                return [...new Set(periods)].sort().reverse(); // 由新到舊
+            }, [invoices]);
+
+            const filteredInvoices = useMemo(() => {
+                return invoices.filter(inv => {
+                    const matchPeriod = filterPeriod === 'ALL' || getInvoicePeriod(inv.date) === filterPeriod;
+                    const matchType = filterType === 'ALL' || inv.invoiceType === filterType;
+                    return matchPeriod && matchType;
+                });
+            }, [invoices, filterPeriod, filterType]);
+
+            const activeInvoices = useMemo(() => filteredInvoices.filter(inv => inv.status !== 'void'), [filteredInvoices]);
+            const voidCount = filteredInvoices.filter(inv => inv.status === 'void').length;
             const totalAmount = activeInvoices.reduce((sum, inv) => sum + (inv.total || 0), 0);
             const totalTax = activeInvoices.reduce((sum, inv) => sum + (inv.tax || 0), 0);
 
-            const chartData = useMemo(() => {
-                const itemMap = {};
-                activeInvoices.forEach(inv => {
-                    if (inv.items) {
-                        inv.items.forEach(it => {
-                            itemMap[it.name] = (itemMap[it.name] || 0) + (it.amount || 0);
-                        });
-                    }
-                });
-                return Object.keys(itemMap)
-                    .map(name => ({ name, value: itemMap[name] }))
-                    .sort((a, b) => b.value - a.value)
-                    .slice(0, 5);
-            }, [activeInvoices]);
-
-            // 圖表渲染 (加入 null check 防止崩潰)
+            // 圖表渲染
             useEffect(() => {
-                if (activeTab === 'dashboard' && barChartRef.current && chartData.length > 0) {
+                if (activeTab === 'dashboard' && barChartRef.current) {
                     if (barChartInstance.current) barChartInstance.current.destroy();
-                    try {
+                    const itemMap = {};
+                    activeInvoices.forEach(inv => (inv.items || []).forEach(it => {
+                        itemMap[it.name] = (itemMap[it.name] || 0) + (it.amount || 0);
+                    }));
+                    const chartData = Object.keys(itemMap).map(n => ({ n, v: itemMap[n] })).sort((a,b) => b.v - a.v).slice(0, 5);
+                    
+                    if (chartData.length > 0) {
                         barChartInstance.current = new Chart(barChartRef.current, {
                             type: 'bar',
-                            data: {
-                                labels: chartData.map(d => d.name),
-                                datasets: [{ label: '銷售額 ($)', data: chartData.map(d => d.value), backgroundColor: COLORS, borderRadius: 8 }]
-                            },
+                            data: { labels: chartData.map(d=>d.n), datasets: [{ data: chartData.map(d=>d.v), backgroundColor: COLORS, borderRadius: 8 }] },
                             options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
                         });
-                    } catch (e) { console.error("Chart Render Error", e); }
+                    }
                 }
-                if (activeTab === 'dashboard' && pieChartRef.current && activeInvoices.length > 0) {
-                    if (pieChartInstance.current) pieChartInstance.current.destroy();
-                    try {
-                        const taxable = activeInvoices.filter(i => i.tax > 0).reduce((s, i) => s + (i.total || 0), 0);
-                        const exempt = activeInvoices.filter(i => i.tax === 0).reduce((s, i) => s + (i.total || 0), 0);
-                        pieChartInstance.current = new Chart(pieChartRef.current, {
-                            type: 'doughnut',
-                            data: {
-                                labels: ['應稅', '免稅'],
-                                datasets: [{ data: [taxable, exempt], backgroundColor: ['#4f46e5', '#10b981'], borderWidth: 0 }]
-                            },
-                            options: { responsive: true, maintainAspectRatio: false, cutout: '70%', plugins: { legend: { position: 'bottom' } } }
-                        });
-                    } catch (e) { console.error("Chart Render Error", e); }
-                }
-            }, [activeTab, chartData, activeInvoices]);
+            }, [activeTab, activeInvoices]);
 
-            // --- 核心操作邏輯 ---
+            // --- 核心操作 ---
             const showToast = (message, type = 'success') => { setToast({ message, type }); setTimeout(() => setToast(null), 3000); };
 
-            const recalculateTotalsFromItems = (itemsToCalc, currentType, currentRate) => {
-                const sumAmount = itemsToCalc.reduce((acc, item) => acc + (item.amount || 0), 0);
-                let newNet = 0; let newTax = 0; let newTotal = 0;
-                if (itemsToCalc.length > 0 && sumAmount > 0) {
-                    if (currentType === '三聯式') { newNet = sumAmount; newTax = Math.round(sumAmount * currentRate); newTotal = sumAmount + newTax; } 
-                    else { newTotal = sumAmount; newNet = Math.round(sumAmount / (1 + currentRate)); newTax = sumAmount - newNet; }
-                }
-                return { netAmount: newNet, tax: newTax, total: newTotal };
-            };
-
-            const handleInputChange = (e) => {
-                const { name, value, type, checked } = e.target;
-                const finalValue = type === 'checkbox' ? (checked ? 'void' : 'active') : value;
-                let newFormData = { ...formData, [name]: finalValue };
-                if (name === 'invoiceNumber') {
-                    let formatted = value.toUpperCase().replace(/[^A-Z0-9]/g, '');
-                    if (formatted.length > 2) formatted = formatted.substring(0, 2) + '-' + formatted.substring(2, 10);
-                    newFormData[name] = formatted;
-                }
-                setFormData(newFormData);
-            };
-
             const addItem = () => {
-                const newItem = { id: generateItemId(), name: '', quantity: 1, unitPrice: '', amount: 0 };
-                setFormData(prev => ({ ...prev, items: [...prev.items, newItem] }));
+                setFormData(prev => ({ ...prev, items: [...prev.items, { id: generateItemId(), name: '', quantity: 1, unitPrice: '', amount: 0 }] }));
             };
 
-            const removeItem = (index) => {
-                const newItems = formData.items.filter((_, i) => i !== index);
-                const totals = recalculateTotalsFromItems(newItems, formData.invoiceType, formData.taxRate);
-                setFormData(prev => ({ ...prev, items: newItems, ...totals }));
+            const removeItem = (idx) => {
+                const newItems = formData.items.filter((_, i) => i !== idx);
+                setFormData(prev => ({ ...prev, items: newItems }));
             };
 
-            const handleItemChange = (index, field, value) => {
+            const handleItemChange = (idx, field, val) => {
                 const newItems = [...formData.items];
-                const item = newItems[index];
+                const item = newItems[idx];
+                item[field] = val;
                 if (field === 'quantity' || field === 'unitPrice') {
-                    item[field] = value === '' ? '' : parseFloat(value);
                     item.amount = Math.round((parseFloat(item.quantity) || 0) * (parseFloat(item.unitPrice) || 0));
-                } else { item[field] = value; }
-                const totals = recalculateTotalsFromItems(newItems, formData.invoiceType, formData.taxRate);
-                setFormData(prev => ({ ...prev, items: newItems, ...totals }));
+                }
+                const sum = newItems.reduce((acc, it) => acc + (it.amount || 0), 0);
+                const tax = Math.round(sum * 0.05);
+                setFormData(prev => ({ ...prev, items: newItems, netAmount: sum, tax: tax, total: sum + tax }));
             };
 
             const handleSubmit = (e) => {
                 e.preventDefault();
-                if (!formData.invoiceNumber) { showToast("請輸入發票號碼", "error"); return; }
-                
-                const existingInv = invoices.find(inv => inv.invoiceNumber === formData.invoiceNumber);
-                let finalInvoice;
-                if (existingInv) {
-                    const mergedItems = [...(existingInv.items || []), ...formData.items.filter(it => it.name.trim())];
-                    const calc = recalculateTotalsFromItems(mergedItems, existingInv.invoiceType, existingInv.taxRate);
-                    finalInvoice = { ...existingInv, items: mergedItems, ...calc, status: formData.status, date: formData.date };
-                } else {
-                    finalInvoice = { ...formData, id: Date.now().toString(), items: formData.items.filter(it => it.name.trim()) };
-                }
-                
-                const updatedList = [finalInvoice, ...invoices.filter(i => i.id !== finalInvoice.id)];
-                setInvoices(updatedList);
-                showToast("資料已儲存至本地快取。", "success");
-                setFormData({ ...formData, invoiceNumber: '', taxId: '', items: [], netAmount: '', tax: '', total: '', status: 'active' });
+                if (!formData.invoiceNumber) return showToast("請輸入發票號碼", "error");
+                const newInvoices = [ { ...formData, id: Date.now().toString() }, ...invoices.filter(i => i.invoiceNumber !== formData.invoiceNumber) ];
+                setInvoices(newInvoices);
+                showToast("存檔成功！", "success");
+                setFormData({ ...formData, invoiceNumber: '', taxId: '', items: [], netAmount: 0, tax: 0, total: 0 });
             };
 
             const handleDelete = (id) => {
-                 setInvoices(invoices.filter(inv => inv.id !== id));
-                 showToast("發票已徹底移除。", "info");
+                setInvoices(invoices.filter(i => i.id !== id));
+                showToast("已徹底刪除", "info");
             };
 
-            // --- 相機功能 ---
-            const openCamera = async () => {
-                setIsCameraOpen(true);
-                try {
-                    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-                    if (videoRef.current) videoRef.current.srcObject = stream;
-                } catch (err) { 
-                    showToast("相機啟動失敗，請檢查權限。", "error"); 
-                    setIsCameraOpen(false); 
-                }
-            };
-
-            const captureAndAnalyze = async () => {
-                if (!videoRef.current || !canvasRef.current) return;
-                if (!apiKey) { showToast("請先在程式碼中配置 Gemini API Key。", "error"); return; }
+            // --- 智慧匯出功能 ---
+            const exportData = () => {
+                if (filteredInvoices.length === 0) return showToast("目前選取條件下無資料", "error");
                 
-                setIsAnalyzing(true); showToast("AI 正全力辨識中...", "info");
-                const canvas = canvasRef.current;
-                const video = videoRef.current;
-                canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-                canvas.getContext('2d').drawImage(video, 0, 0);
-                const base64Image = canvas.toDataURL('image/png').split(',')[1];
+                const headers = ['狀態', '期別', '類型', '號碼', '日期', '統編', '銷售額', '稅額', '總計'];
+                const rows = filteredInvoices.map(i => [
+                    i.status === 'void' ? '作廢' : '正常',
+                    getInvoicePeriod(i.date),
+                    i.invoiceType,
+                    i.invoiceNumber,
+                    i.date,
+                    i.taxId || '-',
+                    i.netAmount,
+                    i.tax,
+                    i.total
+                ].join(','));
                 
-                const stream = video.srcObject;
-                if (stream) stream.getTracks().forEach(t => t.stop());
-                setIsCameraOpen(false);
-
-                try {
-                    const data = await callGeminiVision(base64Image);
-                    setFormData(prev => ({ ...prev, ...data, items: data.items.map(it => ({ ...it, id: generateItemId() })), status: 'active' }));
-                    showToast("辨識成功！請核對資料。", "success");
-                } catch (err) { 
-                    showToast("辨識過程中發生錯誤。", "error"); 
-                } finally { 
-                    setIsAnalyzing(false); 
-                }
+                const csv = '\uFEFF' + [headers.join(','), ...rows].join('\n');
+                const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                
+                // 檔名智慧化
+                const periodLabel = filterPeriod === 'ALL' ? '全期別' : filterPeriod;
+                const typeLabel = filterType === 'ALL' ? '全類型' : filterType;
+                
+                a.href = url;
+                a.download = `發票報表_${periodLabel}_${typeLabel}.csv`;
+                a.click();
+                showToast("報表匯出成功！", "success");
             };
 
             return (
                 <div className="flex flex-col md:flex-row h-screen bg-slate-50 font-sans text-slate-800 overflow-hidden relative">
                     
-                    {/* 相機預覽層 */}
-                    {isCameraOpen && (
-                        <div className="fixed inset-0 z-[100] camera-overlay flex flex-col items-center justify-center p-4">
-                            <video ref={videoRef} autoPlay playsInline className="w-full max-w-lg rounded-3xl shadow-2xl border-4 border-white/10" />
-                            <div className="flex gap-4 mt-8">
-                                <button onClick={() => {
-                                    const stream = videoRef.current.srcObject;
-                                    if (stream) stream.getTracks().forEach(t => t.stop());
-                                    setIsCameraOpen(false);
-                                }} className="bg-white/10 hover:bg-white/20 text-white px-8 py-4 rounded-2xl font-bold transition-all">取消</button>
-                                <button onClick={captureAndAnalyze} className="bg-indigo-600 hover:bg-indigo-500 text-white px-12 py-4 rounded-2xl font-bold shadow-xl active:scale-95 transition-all">拍攝發票</button>
-                            </div>
-                        </div>
-                    )}
-                    <canvas ref={canvasRef} className="hidden" />
-
-                    {/* 側邊導航 */}
-                    <aside className="hidden md:flex w-64 bg-slate-900 text-slate-300 flex-col z-10 shadow-xl flex-shrink-0">
-                        <div className="p-8 text-center">
-                            <h1 className="text-xl font-bold text-white flex items-center justify-center gap-2 tracking-tight">
+                    <aside className="hidden md:flex w-64 bg-slate-900 text-slate-300 flex-col shadow-xl flex-shrink-0">
+                        <div className="p-8 text-center border-b border-slate-800">
+                            <h1 className="text-xl font-black text-white flex items-center justify-center gap-2">
                                 <i className="ph-fill ph-lightning text-emerald-400"></i> NextGen 財務
                             </h1>
-                            <p className="text-[10px] text-slate-500 mt-2 uppercase tracking-widest">穩定本地版 2.0</p>
                         </div>
-                        <nav className="flex-1 px-4 space-y-2 mt-4">
-                            <button onClick={() => setActiveTab('dashboard')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === 'dashboard' ? 'bg-indigo-600 text-white shadow-lg' : 'hover:bg-slate-800'}`}><i className="ph ph-chart-polar text-xl"></i> 戰情儀表板</button>
-                            <button onClick={() => setActiveTab('entry')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === 'entry' ? 'bg-indigo-600 text-white shadow-lg' : 'hover:bg-slate-800'}`}><i className="ph ph-plus-square text-xl"></i> 智能錄入</button>
-                            <button onClick={() => setActiveTab('list')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === 'list' ? 'bg-indigo-600 text-white shadow-lg' : 'hover:bg-slate-800'}`}><i className="ph ph-list-numbers text-xl"></i> 整合清單</button>
+                        <nav className="flex-1 px-4 space-y-2 mt-8">
+                            <button onClick={() => setActiveTab('dashboard')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === 'dashboard' ? 'bg-indigo-600 text-white shadow-lg' : 'hover:bg-slate-800'}`}><i className="ph ph-chart-polar"></i> 戰情儀表板</button>
+                            <button onClick={() => setActiveTab('entry')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === 'entry' ? 'bg-indigo-600 text-white shadow-lg' : 'hover:bg-slate-800'}`}><i className="ph ph-plus-square"></i> 智能錄入</button>
+                            <button onClick={() => setActiveTab('list')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === 'list' ? 'bg-indigo-600 text-white shadow-lg' : 'hover:bg-slate-800'}`}><i className="ph ph-list-numbers"></i> 整合清單</button>
                         </nav>
-                        <div className="p-6 mt-auto">
-                           <div className="px-4 py-3 rounded-2xl bg-slate-800 border border-slate-700 flex items-center gap-3 text-slate-500">
-                                <i className="ph ph-shield-check text-xl text-emerald-500"></i>
-                                <span className="text-[10px] font-bold uppercase tracking-widest">物理脫機模式</span>
-                           </div>
-                        </div>
                     </aside>
                     
                     <main className="flex-1 overflow-y-auto relative pb-24 md:pb-0">
                         {toast && (
-                            <div className="fixed top-6 right-6 px-5 py-3 rounded-2xl shadow-2xl bg-white border border-slate-200 z-[110] animate-slide-in flex items-center gap-3">
-                                <i className={`ph-fill ${toast.type === 'error' ? 'ph-x-circle text-red-500' : 'ph-check-circle text-emerald-500'} text-xl`}></i>
-                                <span className="font-bold text-sm">{toast.message}</span>
+                            <div className="fixed top-6 right-6 px-5 py-3 rounded-2xl shadow-2xl bg-white border border-slate-200 z-[110] animate-slide-in flex items-center gap-3 font-bold">
+                                {toast.message}
                             </div>
                         )}
 
                         <div className="p-4 md:p-10 max-w-6xl mx-auto">
-                            {/* 儀表板 */}
                             {activeTab === 'dashboard' && (
                                 <div className="space-y-8 animate-slide-in">
-                                    <header>
-                                        <h2 className="text-3xl font-black text-slate-800 tracking-tight">戰情儀表板</h2>
-                                        <p className="text-slate-500 mt-1 italic text-sm">數據每秒更新一次，已扣除作廢發票</p>
-                                    </header>
+                                    <header><h2 className="text-3xl font-black tracking-tight">戰情儀表板</h2></header>
                                     <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                                         <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                                            <div className="text-slate-400 text-[10px] font-bold mb-1 uppercase tracking-widest">有效發票張數</div>
-                                            <div className="text-4xl font-black text-slate-800">{activeInvoices.length}</div>
-                                        </div>
-                                        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                                            <div className="text-slate-400 text-[10px] font-bold mb-1 uppercase tracking-widest">累計稅額 (5%)</div>
-                                            <div className="text-4xl font-black text-indigo-600">${totalTax.toLocaleString()}</div>
+                                            <div className="text-slate-400 text-[10px] font-bold uppercase tracking-widest">張數</div>
+                                            <div className="text-4xl font-black">{activeInvoices.length}</div>
                                         </div>
                                         <div className="bg-indigo-600 p-6 rounded-3xl shadow-xl text-white">
-                                            <div className="text-indigo-200 text-[10px] font-bold mb-1 uppercase tracking-widest">含稅總額</div>
+                                            <div className="text-indigo-200 text-[10px] font-bold uppercase tracking-widest">含稅總計</div>
                                             <div className="text-4xl font-black font-mono">${totalAmount.toLocaleString()}</div>
                                         </div>
-                                        <div className="bg-red-50 p-6 rounded-3xl border border-red-100">
-                                            <div className="text-red-400 text-[10px] font-bold mb-1 uppercase tracking-widest">本期作廢張數</div>
-                                            <div className="text-4xl font-black text-red-600">{voidCount}</div>
+                                        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                                            <div className="text-slate-400 text-[10px] font-bold uppercase tracking-widest">作廢</div>
+                                            <div className="text-4xl font-black text-red-500">{voidCount}</div>
                                         </div>
                                     </div>
-                                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                                        <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm h-96">
-                                            <h4 className="font-bold text-slate-700 mb-6 flex items-center gap-2"><i className="ph-fill ph-chart-bar text-indigo-500"></i> 熱銷品項營收排行</h4>
-                                            {chartData.length > 0 ? (
-                                                <div className="h-64"><canvas ref={barChartRef}></canvas></div>
-                                            ) : (
-                                                <div className="h-64 flex items-center justify-center text-slate-300 italic text-sm">尚無商品數據</div>
-                                            )}
-                                        </div>
-                                        <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm h-96 text-center">
-                                            <h4 className="font-bold text-slate-700 mb-6 flex items-center gap-2 justify-center"><i className="ph-fill ph-chart-donut text-emerald-500"></i> 稅額比例分佈</h4>
-                                            {activeInvoices.length > 0 ? (
-                                                <div className="h-64"><canvas ref={pieChartRef}></canvas></div>
-                                            ) : (
-                                                <div className="h-64 flex items-center justify-center text-slate-300 italic text-sm">尚無發票數據</div>
-                                            )}
-                                        </div>
+                                    <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm h-80">
+                                        <h4 className="font-bold mb-6">熱銷品項 (Top 5)</h4>
+                                        <div className="h-48"><canvas ref={barChartRef}></canvas></div>
                                     </div>
                                 </div>
                             )}
 
-                            {/* 錄入頁面 */}
                             {activeTab === 'entry' && (
                                 <div className="space-y-6 animate-slide-in">
-                                    <header><h2 className="text-3xl font-black text-slate-800">智能錄入系統</h2></header>
-                                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                                        <div className="lg:col-span-2 bg-white rounded-3xl border border-slate-200 p-8 shadow-sm">
-                                            <form onSubmit={handleSubmit} className="space-y-6">
-                                                <div className="flex flex-wrap justify-between items-center bg-slate-50 p-2 rounded-2xl mb-6 border border-slate-100 gap-4">
-                                                    <div className="flex gap-2">
-                                                        <button type="button" onClick={() => setFormData({...formData, invoiceType: '三聯式'})} className={`px-6 py-2 rounded-xl text-xs font-bold transition-all ${formData.invoiceType === '三聯式' ? 'bg-white shadow-md text-indigo-700' : 'text-slate-400'}`}>三聯 (B2B)</button>
-                                                        <button type="button" onClick={() => setFormData({...formData, invoiceType: '二聯式'})} className={`px-6 py-2 rounded-xl text-xs font-bold transition-all ${formData.invoiceType === '二聯式' ? 'bg-white shadow-md text-indigo-700' : 'text-slate-400'}`}>二聯 (B2C)</button>
-                                                    </div>
-                                                    <label className="flex items-center gap-2 cursor-pointer bg-white px-4 py-2 rounded-xl border border-slate-200">
-                                                        <input type="checkbox" name="status" checked={formData.status === 'void'} onChange={handleInputChange} className="w-4 h-4 accent-red-500" />
-                                                        <span className="text-xs font-bold text-red-600 uppercase">標記作廢</span>
-                                                    </label>
+                                    <header><h2 className="text-3xl font-black tracking-tight">發票錄入</h2></header>
+                                    <div className="bg-white rounded-3xl border border-slate-200 p-8 shadow-sm">
+                                        <form onSubmit={handleSubmit} className="space-y-6">
+                                            <div className="flex justify-between items-center bg-slate-50 p-2 rounded-2xl border border-slate-100">
+                                                <div className="flex gap-2">
+                                                    <button type="button" onClick={() => setFormData({...formData, invoiceType: '三聯式'})} className={`px-6 py-1.5 rounded-xl text-xs font-bold transition-all ${formData.invoiceType === '三聯式' ? 'bg-white shadow-md text-indigo-700' : 'text-slate-400'}`}>三聯</button>
+                                                    <button type="button" onClick={() => setFormData({...formData, invoiceType: '二聯式'})} className={`px-6 py-1.5 rounded-xl text-xs font-bold transition-all ${formData.invoiceType === '二聯式' ? 'bg-white shadow-md text-indigo-700' : 'text-slate-400'}`}>二聯</button>
                                                 </div>
-                                                <div className="grid grid-cols-2 gap-6">
-                                                    <div className="space-y-2"><label className="text-xs font-black uppercase text-slate-400 tracking-widest">發票號碼</label><input type="text" name="invoiceNumber" value={formData.invoiceNumber} onChange={handleInputChange} className="w-full px-4 py-4 rounded-2xl border border-slate-200 outline-none font-mono uppercase focus:ring-2 focus:ring-indigo-500 transition-all" placeholder="例: AB-12345678" /></div>
-                                                    <div className="space-y-2"><label className="text-xs font-black uppercase text-slate-400 tracking-widest">開立日期</label><input type="date" name="date" value={formData.date} onChange={handleInputChange} className="w-full px-4 py-4 rounded-2xl border border-slate-200 outline-none" /></div>
-                                                </div>
-                                                <div className="pt-6 border-t border-slate-100">
-                                                    <div className="flex justify-between items-center mb-4"><h3 className="font-black text-indigo-900 flex items-center gap-2"><i className="ph ph-list-plus"></i> 商品品項明細</h3><button type="button" onClick={addItem} className="text-xs font-bold text-indigo-600 hover:bg-indigo-50 px-3 py-1.5 rounded-lg transition-colors">+ 新增品項</button></div>
-                                                    <div className="space-y-3 max-h-72 overflow-y-auto no-scrollbar pr-2">
-                                                        {formData.items.map((it, i) => (
-                                                            <div key={it.id} className="flex gap-3 p-4 bg-slate-50 rounded-2xl relative border border-slate-100 group">
-                                                                <input type="text" placeholder="商品名稱" value={it.name} onChange={(e) => handleItemChange(i, 'name', e.target.value)} className="flex-1 bg-transparent border-none text-sm outline-none font-medium" />
-                                                                <input type="number" placeholder="數量" value={it.quantity} onChange={(e) => handleItemChange(i, 'quantity', e.target.value)} className="w-16 bg-transparent text-center text-sm outline-none font-mono" />
-                                                                <input type="number" placeholder="單價" value={it.unitPrice} onChange={(e) => handleItemChange(i, 'unitPrice', e.target.value)} className="w-24 bg-transparent text-right text-sm outline-none font-mono" />
-                                                                <div className="w-24 text-right font-black text-slate-600 text-sm">${(it.amount || 0).toLocaleString()}</div>
-                                                                <button type="button" onClick={() => removeItem(i)} className="absolute -top-2 -right-2 bg-white p-1 rounded-full shadow-md text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"><i className="ph ph-x-circle text-xl"></i></button>
-                                                            </div>
-                                                        ))}
-                                                        {formData.items.length === 0 && <div className="py-10 text-center text-slate-300 italic text-sm border-2 border-dashed border-slate-100 rounded-3xl">請開始錄入品項...</div>}
-                                                    </div>
-                                                </div>
-                                                <div className={`p-8 rounded-3xl text-white grid grid-cols-1 md:grid-cols-3 gap-6 shadow-2xl transition-all ${formData.status === 'void' ? 'bg-slate-700' : 'bg-indigo-900 shadow-indigo-200'}`}>
-                                                    <div><label className="text-[10px] uppercase font-bold text-indigo-300 tracking-widest">銷售額 (未稅)</label><div className="text-2xl font-black font-mono mt-1">${(formData.netAmount || 0).toLocaleString()}</div></div>
-                                                    <div className="md:border-x md:border-indigo-800/50 md:px-6"><label className="text-[10px] uppercase font-bold text-indigo-300 tracking-widest">稅額 (5%)</label><div className="text-2xl font-black font-mono mt-1">${(formData.tax || 0).toLocaleString()}</div></div>
-                                                    <div className="md:text-right"><label className="text-[10px] uppercase font-bold text-indigo-300 tracking-widest">總計金額 {formData.status === 'void' && '(作廢)'}</label><div className="text-3xl font-black font-mono mt-1 text-emerald-400">${(formData.total || 0).toLocaleString()}</div></div>
-                                                </div>
-                                                <div className="flex flex-col md:flex-row gap-4">
-                                                    <button type="button" onClick={openCamera} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-5 rounded-2xl flex items-center justify-center gap-3 transition-all"><i className="ph ph-camera text-xl"></i> AI 拍照辨識</button>
-                                                    <button type="submit" className={`flex-[2] font-black py-5 rounded-2xl shadow-xl transition-all active:scale-[0.98] text-lg ${formData.status === 'void' ? 'bg-red-600 text-white' : 'bg-indigo-600 text-white'}`}>
-                                                        {formData.status === 'void' ? '存檔作廢資訊' : '儲存發票數據'}
-                                                    </button>
-                                                </div>
-                                            </form>
-                                        </div>
-                                        <div className="space-y-6">
-                                            <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
-                                                <h4 className="font-black text-slate-800 mb-4">系統狀態報告</h4>
-                                                <p className="text-xs text-slate-500 leading-relaxed italic">「工程師已經將 Firebase 模組完全隔離，目前系統運行於純本地模式，這將根治啟動白屏的問題。」</p>
-                                                <div className="mt-6 p-4 bg-emerald-50 rounded-2xl border border-emerald-100">
-                                                    <div className="flex items-center gap-2 text-emerald-700 font-bold text-xs"><i className="ph-fill ph-check-circle"></i> LocalStorage 穩定連線中</div>
+                                                <label className="flex items-center gap-2 cursor-pointer mr-2">
+                                                    <input type="checkbox" checked={formData.status === 'void'} onChange={e => setFormData({...formData, status: e.target.checked ? 'void' : 'active'})} className="accent-red-500" />
+                                                    <span className="text-[10px] font-bold text-red-600">標記作廢</span>
+                                                </label>
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-6">
+                                                <div className="space-y-2"><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">號碼</label><input type="text" value={formData.invoiceNumber} onChange={e => setFormData({...formData, invoiceNumber: e.target.value.toUpperCase()})} className="w-full px-4 py-3 rounded-2xl border border-slate-200 outline-none font-mono" placeholder="XX-12345678" /></div>
+                                                <div className="space-y-2"><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">日期</label><input type="date" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} className="w-full px-4 py-3 rounded-2xl border border-slate-200 outline-none" /></div>
+                                            </div>
+                                            <div className="pt-6 border-t border-slate-100">
+                                                <div className="flex justify-between items-center mb-4"><h3 className="font-bold text-indigo-900">明細</h3><button type="button" onClick={addItem} className="text-xs font-bold text-indigo-600">+ 新成品項</button></div>
+                                                <div className="space-y-3">
+                                                    {formData.items.map((it, i) => (
+                                                        <div key={it.id} className="flex gap-3 p-4 bg-slate-50 rounded-2xl relative group">
+                                                            <input type="text" placeholder="品名" value={it.name} onChange={e => handleItemChange(i, 'name', e.target.value)} className="flex-1 bg-transparent outline-none text-sm font-bold" />
+                                                            <input type="number" placeholder="數量" value={it.quantity} onChange={e => handleItemChange(i, 'quantity', e.target.value)} className="w-16 bg-transparent text-center text-sm outline-none" />
+                                                            <input type="number" placeholder="單價" value={it.unitPrice} onChange={e => handleItemChange(i, 'unitPrice', e.target.value)} className="w-20 bg-transparent text-right text-sm outline-none" />
+                                                            <div className="w-24 text-right font-black text-slate-600 text-sm">${(it.amount || 0).toLocaleString()}</div>
+                                                            <button type="button" onClick={() => removeItem(i)} className="absolute -top-2 -right-2 bg-white p-1 rounded-full shadow-md text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"><i className="ph ph-x-circle text-xl"></i></button>
+                                                        </div>
+                                                    ))}
                                                 </div>
                                             </div>
-                                        </div>
+                                            <div className={`p-6 rounded-3xl text-white flex justify-between items-center shadow-lg ${formData.status === 'void' ? 'bg-slate-700' : 'bg-indigo-900 shadow-indigo-200'}`}>
+                                                <div><div className="text-[10px] uppercase font-bold text-indigo-300">未稅總額</div><div className="text-xl font-mono">${(formData.netAmount || 0).toLocaleString()}</div></div>
+                                                <div className="text-right"><div className="text-[10px] uppercase font-bold text-indigo-300">含稅總計</div><div className="text-3xl font-black font-mono text-emerald-400">${(formData.total || 0).toLocaleString()}</div></div>
+                                            </div>
+                                            <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-2xl shadow-xl transition-all active:scale-[0.98]">儲存發票</button>
+                                        </form>
                                     </div>
                                 </div>
                             )}
 
-                            {/* 清單頁面 */}
                             {activeTab === 'list' && (
                                 <div className="space-y-6 animate-slide-in">
-                                    <header className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4">
-                                        <div><h2 className="text-3xl font-black text-slate-800">整合清單</h2><p className="text-slate-500 mt-1">井然有序的發票履歷</p></div>
-                                        <button onClick={() => {
-                                            const headers = ['號碼', '期別', '狀態', '總額'];
-                                            const rows = invoices.map(i => `${i.invoiceNumber},${getInvoicePeriod(i.date)},${i.status},${i.total}`);
-                                            const csv = '\uFEFF' + [headers.join(','), ...rows].join('\n');
-                                            const blob = new Blob([csv], {type: 'text/csv;charset=utf-8'});
-                                            const url = window.URL.createObjectURL(blob);
-                                            const a = document.createElement('a'); a.href = url; a.download = '發票財務報表.csv'; a.click();
-                                        }} className="w-full md:w-auto bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-2xl font-black flex items-center justify-center gap-3 shadow-lg transition-all active:scale-95"><i className="ph ph-download text-xl"></i> 導出 CSV</button>
+                                    <header className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
+                                        <div><h2 className="text-3xl font-black tracking-tight">整合清單</h2><p className="text-slate-500 mt-1 italic text-xs">可針對篩選條件進行匯出</p></div>
+                                        
+                                        {/* 篩選與匯出區 */}
+                                        <div className="flex flex-wrap gap-4 w-full md:w-auto">
+                                            <div className="bg-white border px-3 py-2 rounded-xl flex items-center gap-2 shadow-sm">
+                                                <i className="ph ph-calendar-blank text-slate-400"></i>
+                                                <select value={filterPeriod} onChange={e => setFilterPeriod(e.target.value)} className="text-xs font-bold outline-none bg-transparent">
+                                                    <option value="ALL">全部期別</option>
+                                                    {availablePeriods.map(p => <option key={p} value={p}>{p}</option>)}
+                                                </select>
+                                            </div>
+                                            <div className="bg-white border px-3 py-2 rounded-xl flex items-center gap-2 shadow-sm">
+                                                <i className="ph ph-funnel text-slate-400"></i>
+                                                <select value={filterType} onChange={e => setFilterType(e.target.value)} className="text-xs font-bold outline-none bg-transparent">
+                                                    <option value="ALL">全部類型</option>
+                                                    <option value="三聯式">三聯式</option>
+                                                    <option value="二聯式">二聯式</option>
+                                                </select>
+                                            </div>
+                                            <button onClick={exportData} className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2.5 rounded-xl font-black flex items-center gap-2 shadow-md transition-all active:scale-95 text-xs">
+                                                <i className="ph ph-download"></i> 導出 CSV
+                                            </button>
+                                        </div>
                                     </header>
+                                    
                                     <div className="bg-white rounded-[2rem] border border-slate-200 overflow-hidden shadow-sm">
                                         <div className="overflow-x-auto">
                                             <table className="w-full text-left">
-                                                <thead className="bg-slate-50 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] border-b">
-                                                    <tr><th className="p-6 w-14"></th><th className="p-6">發票號碼</th><th className="p-6">目前狀態</th><th className="p-6 text-right">總額 (含稅)</th><th className="p-6 text-center">操作</th></tr>
+                                                <thead className="bg-slate-50 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b">
+                                                    <tr><th className="p-6 w-14"></th><th className="p-6">發票號碼</th><th className="p-6 text-center">狀態</th><th className="p-6 text-right font-black text-indigo-600">總額 (含稅)</th><th className="p-6 text-center">操作</th></tr>
                                                 </thead>
                                                 <tbody className="divide-y divide-slate-100">
-                                                    {invoices.map(inv => (
+                                                    {filteredInvoices.map(inv => (
                                                         <Fragment key={inv.id}>
-                                                            <tr onClick={() => setExpandedInvoiceId(expandedInvoiceId === inv.id ? null : inv.id)} className={`cursor-pointer transition-all ${inv.status === 'void' ? 'bg-red-50/30' : expandedInvoiceId === inv.id ? 'bg-indigo-50/50' : 'hover:bg-slate-50'}`}>
+                                                            <tr onClick={() => setExpandedInvoiceId(expandedInvoiceId === inv.id ? null : inv.id)} className={`cursor-pointer transition-all ${inv.status === 'void' ? 'bg-red-50/20' : 'hover:bg-slate-50'}`}>
                                                                 <td className="p-6 text-center"><i className={`ph-bold ph-caret-right text-indigo-400 transition-transform ${expandedInvoiceId === inv.id ? 'rotate-90' : ''}`}></i></td>
                                                                 <td className={`p-6 font-black font-mono text-lg ${inv.status === 'void' ? 'line-through text-slate-300' : 'text-slate-800'}`}>{inv.invoiceNumber}</td>
-                                                                <td className="p-6">{inv.status === 'void' ? <span className="bg-red-100 text-red-600 px-3 py-1 rounded-full text-[10px] font-black">作廢</span> : <span className="bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full text-[10px] font-black">正常</span>}</td>
+                                                                <td className="p-6 text-center">{inv.status === 'void' ? <span className="bg-red-100 text-red-600 px-3 py-1 rounded-full text-[10px] font-black">作廢</span> : <span className="bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full text-[10px] font-black">正常</span>}</td>
                                                                 <td className={`p-6 text-right font-black font-mono text-xl ${inv.status === 'void' ? 'text-slate-300' : 'text-indigo-700'}`}>${(inv.total || 0).toLocaleString()}</td>
                                                                 <td className="p-6 text-center"><button onClick={(e) => { e.stopPropagation(); handleDelete(inv.id); }} className="text-slate-300 hover:text-red-500 transition-colors p-2"><i className="ph ph-trash-simple text-2xl"></i></button></td>
                                                             </tr>
@@ -469,14 +363,14 @@
                                                                                     <tr><th className="p-4">品項名稱</th><th className="p-4 text-center">數量</th><th className="p-4 text-right">單價</th><th className="p-4 text-right">小計</th></tr>
                                                                                 </thead>
                                                                                 <tbody className="divide-y divide-slate-800/50">
-                                                                                    {inv.items && inv.items.length > 0 ? inv.items.map((it, idx) => (
+                                                                                    {(inv.items || []).map((it, idx) => (
                                                                                         <tr key={idx} className="hover:bg-slate-800/30">
                                                                                             <td className="p-4 font-medium">{it.name}</td>
                                                                                             <td className="p-4 text-center font-mono">{it.quantity}</td>
                                                                                             <td className="p-4 text-right font-mono">${(it.unitPrice || 0).toLocaleString()}</td>
                                                                                             <td className="p-4 text-right font-black text-emerald-400 font-mono">${(it.amount || 0).toLocaleString()}</td>
                                                                                         </tr>
-                                                                                    )) : <tr><td colSpan="4" className="p-10 text-center text-slate-600">無商品數據</td></tr>}
+                                                                                    ))}
                                                                                 </tbody>
                                                                             </table>
                                                                         </div>
@@ -485,7 +379,7 @@
                                                             )}
                                                         </Fragment>
                                                     ))}
-                                                    {invoices.length === 0 && <tr><td colSpan="5" className="p-32 text-center text-slate-300 font-bold italic">目前尚無整合數據</td></tr>}
+                                                    {filteredInvoices.length === 0 && <tr><td colSpan="5" className="p-32 text-center text-slate-300 font-bold italic">查無符合篩選條件的發票</td></tr>}
                                                 </tbody>
                                             </table>
                                         </div>
@@ -495,8 +389,7 @@
                         </div>
                     </main>
                     
-                    {/* 手機導航 */}
-                    <nav className="md:hidden fixed bottom-0 w-full bg-white border-t border-slate-200 flex justify-around items-center p-4 z-50 pb-safe shadow-2xl">
+                    <nav className="md:hidden fixed bottom-0 w-full bg-white border-t p-4 z-50 flex justify-around shadow-2xl">
                         <button onClick={() => setActiveTab('dashboard')} className={activeTab === 'dashboard' ? 'text-indigo-600' : 'text-slate-400'}><i className="ph-fill ph-chart-polar text-3xl"></i></button>
                         <button onClick={() => setActiveTab('entry')} className={activeTab === 'entry' ? 'text-indigo-600' : 'text-slate-400'}><i className="ph-fill ph-plus-circle text-3xl"></i></button>
                         <button onClick={() => setActiveTab('list')} className={activeTab === 'list' ? 'text-indigo-600' : 'text-slate-400'}><i className="ph-fill ph-list-numbers text-3xl"></i></button>
@@ -505,9 +398,7 @@
             );
         }
 
-        // 啟動 React
-        const container = document.getElementById('root');
-        const root = ReactDOM.createRoot(container);
+        const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
     </script>
 </body>
