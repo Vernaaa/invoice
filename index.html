@@ -84,6 +84,8 @@
             const [toast, setToast] = useState(null);
             const [expandedInvoiceId, setExpandedInvoiceId] = useState(null);
             const [syncStatus, setSyncStatus] = useState('idle');
+            
+            // 核心篩選狀態：進銷項、期別、發票類型 (保留所有更新版本)
             const [filterPeriod, setFilterPeriod] = useState('ALL');
             const [filterType, setFilterType] = useState('ALL');
             const [filterTrans, setFilterTrans] = useState('ALL');
@@ -92,11 +94,11 @@
             const chartInstances = useRef({});
 
             const [formData, setFormData] = useState({
-                transactionType: '銷項', // 新增：銷項 vs 進項
+                transactionType: '銷項',
                 invoiceType: '三聯式', 
                 taxType: 'taxable', 
                 invoiceNumber: '', 
-                vendorName: '', // 新增：對方公司名稱
+                vendorName: '', 
                 date: new Date().toISOString().split('T')[0], 
                 taxId: '', 
                 items: [], 
@@ -248,7 +250,6 @@
                         const lines = text.split(/\r?\n/).filter(line => line.trim() !== "");
                         const headers = parseCSVLine(lines[0]);
                         
-                        // 支援 Supabase 原始檔
                         if (headers.includes('id') && headers.includes('data')) {
                             const dataIdx = headers.indexOf('data');
                             const imported = lines.slice(1).map(l => {
@@ -260,7 +261,6 @@
                             return;
                         }
 
-                        // 支援明細報表還原
                         const invoiceMap = new Map();
                         for (let i = 1; i < lines.length; i++) {
                             const cols = parseCSVLine(lines[i]);
@@ -328,11 +328,11 @@
                             <div className="max-w-4xl mx-auto space-y-8 animate-slide-in">
                                 <header className="bg-indigo-900 p-12 rounded-[3.5rem] text-white shadow-2xl text-center">
                                     <h2 className="text-4xl font-black mb-4">進銷項管理系統 3.0</h2>
-                                    <p className="text-indigo-200 text-lg font-medium italic">「精確區分收支來源，打造全方位財務透明度。」</p>
+                                    <p className="text-indigo-200 text-lg font-medium italic">「三位一體篩選引擎，實現極致財務洞察。」</p>
                                 </header>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                                    <div className="bg-white p-8 rounded-[2rem] border shadow-sm"><h4 className="font-black text-indigo-700 mb-3 flex items-center gap-2"><i className="ph ph-swap text-2xl"></i> 進銷項雙軌制</h4><p className="text-sm text-slate-500 leading-relaxed font-medium">現在您可以切換「銷項（營收）」與「進項（採購）」。系統會針對進項發票額外要求填寫供應商名稱，便於對帳。</p></div>
-                                    <div className="bg-white p-8 rounded-[2rem] border shadow-sm"><h4 className="font-black text-emerald-700 mb-3 flex items-center gap-2"><i className="ph ph-chart-line-up text-2xl"></i> 淨額分析儀表板</h4><p className="text-sm text-slate-500 leading-relaxed font-medium">儀表板現在會同步顯示銷項與進項的對比趨勢，幫助您一眼看出經營獲利狀況。</p></div>
+                                    <div className="bg-white p-8 rounded-[2rem] border shadow-sm"><h4 className="font-black text-indigo-700 mb-3 flex items-center gap-2"><i className="ph ph-funnel text-2xl"></i> 全方位篩選中心</h4><p className="text-sm text-slate-500 leading-relaxed font-medium">整合清單現在具備「收支、期別、格式」三大篩選器，讓您在數千筆資料中瞬間定位關鍵發票。</p></div>
+                                    <div className="bg-white p-8 rounded-[2rem] border shadow-sm"><h4 className="font-black text-emerald-700 mb-3 flex items-center gap-2"><i className="ph ph-file-csv text-2xl"></i> 資料永續完整性</h4><p className="text-sm text-slate-500 leading-relaxed font-medium">導出與還原引擎已全面適配所有維度，確保數據在不同平台間轉換時，屬性資訊不發生遺失。</p></div>
                                 </div>
                             </div>
                         )}
@@ -420,19 +420,36 @@
                                     <div><h2 className="text-3xl font-black text-slate-800 tracking-tight italic">發票整合清單</h2></div>
                                     <div className="flex flex-wrap gap-4 w-full md:w-auto">
                                         <label className="bg-white border-2 border-dashed border-indigo-200 text-indigo-600 px-6 py-2.5 rounded-2xl font-black flex items-center gap-2 shadow-sm text-xs cursor-pointer hover:bg-indigo-50 transition-all"><i className="ph ph-upload"></i> 從 CSV 還原<input type="file" accept=".csv" onChange={importCSV} className="hidden" /></label>
-                                        <div className="bg-white border px-4 py-2 rounded-2xl flex items-center gap-2 shadow-sm text-xs font-bold border-slate-200"><i className="ph ph-swap text-indigo-500"></i>
+                                        
+                                        {/* 篩選器 1：進項/銷項 */}
+                                        <div className="bg-white border px-4 py-2 rounded-2xl flex items-center gap-2 shadow-sm text-xs font-bold border-slate-200">
+                                            <i className="ph ph-swap text-indigo-500"></i>
                                             <select value={filterTrans} onChange={e=>setFilterTrans(e.target.value)} className="outline-none bg-transparent">
                                                 <option value="ALL">全部收支</option>
                                                 <option value="銷項">僅看銷項 (營收)</option>
                                                 <option value="進項">僅看進項 (成本)</option>
                                             </select>
                                         </div>
-                                        <div className="bg-white border px-4 py-2 rounded-2xl flex items-center gap-2 shadow-sm text-xs font-bold border-slate-200"><i className="ph ph-calendar text-indigo-500"></i>
+
+                                        {/* 篩選器 2：月份期別 */}
+                                        <div className="bg-white border px-4 py-2 rounded-2xl flex items-center gap-2 shadow-sm text-xs font-bold border-slate-200">
+                                            <i className="ph ph-calendar text-indigo-500"></i>
                                             <select value={filterPeriod} onChange={e=>setFilterPeriod(e.target.value)} className="outline-none bg-transparent">
                                                 <option value="ALL">全部期別</option>
                                                 {availablePeriods.map(p=><option key={p} value={p}>{p}</option>)}
                                             </select>
                                         </div>
+
+                                        {/* 篩選器 3：二聯/三聯 (已復位並強化) */}
+                                        <div className="bg-white border px-4 py-2 rounded-2xl flex items-center gap-2 shadow-sm text-xs font-bold border-slate-200">
+                                            <i className="ph ph-receipt text-indigo-500"></i>
+                                            <select value={filterType} onChange={e=>setFilterType(e.target.value)} className="outline-none bg-transparent">
+                                                <option value="ALL">全部發票類型</option>
+                                                <option value="三聯式">三聯式 (B2B)</option>
+                                                <option value="二聯式">二聯式 (B2C)</option>
+                                            </select>
+                                        </div>
+
                                         <button onClick={exportCSV} className="bg-emerald-600 text-white px-8 py-3 rounded-2xl font-black flex items-center gap-2 shadow-lg text-xs hover:bg-emerald-700 transition-all"><i className="ph ph-download"></i> 導出 CSV</button>
                                     </div>
                                 </header>
@@ -443,9 +460,9 @@
                                         </thead>
                                         <tbody className="divide-y divide-slate-100">
                                             {invoices.filter(i=>{
-                                                const matchPeriod=filterPeriod==='ALL'||getInvoicePeriod(i.date)===filterPeriod;
-                                                const matchType=filterType==='ALL'||i.invoiceType===filterType;
-                                                const matchTrans=filterTrans==='ALL'||i.transactionType===filterTrans;
+                                                const matchPeriod = filterPeriod === 'ALL' || getInvoicePeriod(i.date) === filterPeriod;
+                                                const matchType = filterType === 'ALL' || i.invoiceType === filterType;
+                                                const matchTrans = filterTrans === 'ALL' || i.transactionType === filterTrans;
                                                 return matchPeriod && matchType && matchTrans;
                                             }).map(inv=>(
                                                 <Fragment key={inv.id}>
@@ -455,6 +472,7 @@
                                                             <div className="flex flex-col items-center">
                                                                 <span className={`text-[10px] font-black px-3 py-1 rounded-md border ${inv.transactionType==='進項'?'border-red-200 text-red-600 bg-red-50':'border-indigo-200 text-indigo-700 bg-indigo-50'}`}>{inv.transactionType || '銷項'}</span>
                                                                 <div className="text-[10px] font-bold text-slate-400 mt-1 truncate max-w-[120px]">{inv.vendorName || '公司內帳'}</div>
+                                                                <div className="text-[8px] font-bold text-slate-300 italic">{inv.invoiceType}</div>
                                                             </div>
                                                         </td>
                                                         <td className="p-6 text-center">{inv.status==='void'?<span className="bg-red-50 text-red-600 px-3 py-1 rounded-full text-[10px] font-black">作廢</span>:<span className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full text-[10px] font-black">正常</span>}</td>
