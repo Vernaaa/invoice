@@ -214,6 +214,14 @@
                 return JSON.parse(result.candidates?.[0]?.content?.parts?.[0]?.text);
             };
 
+            const openCamera = async () => {
+                setIsCameraOpen(true);
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+                    if (videoRef.current) videoRef.current.srcObject = stream;
+                } catch (err) { showToast("相機啟動失敗", "error"); setIsCameraOpen(false); }
+            };
+
             const captureAndAnalyze = async () => {
                 if (!videoRef.current || !canvasRef.current) return;
                 setIsAnalyzing(true); showToast("AI 辨識中...", "info");
@@ -252,6 +260,20 @@
                     newFormData[name] = formatted;
                 }
                 setFormData(newFormData);
+            };
+
+            const addItem = () => {
+                const newItem = { id: generateItemId(), name: '', quantity: 1, unitPrice: '', amount: 0 };
+                setFormData({ ...formData, items: [...formData.items, newItem] });
+            };
+
+            const removeItem = (index) => {
+                const newItems = formData.items.filter((_, i) => i !== index);
+                setFormData({ 
+                    ...formData, 
+                    items: newItems, 
+                    ...recalculateTotalsFromItems(newItems, formData.invoiceType, formData.taxRate) 
+                });
             };
 
             const handleItemChange = (index, field, value) => {
