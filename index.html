@@ -16,7 +16,7 @@
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
-    <!-- 引入 Firebase Compat SDK -->
+    <!-- 引入 Firebase Compat SDK (解決相容性問題) -->
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
@@ -217,6 +217,7 @@
                 return () => { if (pieChartInstance.current) pieChartInstance.current.destroy(); };
             }, [activeTab, taxDistributionData]);
 
+            // --- 核心更新：智慧 CSV 導出引擎 ---
             const exportToCSV = () => {
                 if (filteredInvoices.length === 0) { showToast('目前條件下沒有資料可以匯出喔！', 'info'); return; }
                 const headers = ['期別', '發票類型', '稅別', '發票號碼', '開立日期', '買受人統編', '品項名稱', '單價', '數量', '品項小計', '整筆銷售額(未稅)', '整筆營業稅', '整筆總計(含稅)'];
@@ -224,16 +225,40 @@
                 
                 filteredInvoices.forEach(inv => {
                     const taxTypeLabel = inv.tax === 0 ? '免稅' : '應稅';
-                    const baseInfo = `${getInvoicePeriod(inv.date)},${inv.invoiceType},${taxTypeLabel},${inv.invoiceNumber},${inv.date},${inv.taxId || ''}`;
-                    const totalInfo = `${inv.netAmount},${inv.tax},${inv.total}`;
+                    const period = getInvoicePeriod(inv.date);
+                    const type = inv.invoiceType;
+                    const invNo = inv.invoiceNumber;
+                    const date = inv.date;
+                    const taxId = inv.taxId || '';
+                    
+                    const totalNet = inv.netAmount;
+                    const totalTax = inv.tax;
+                    const totalGross = inv.total;
                     
                     if (inv.items && inv.items.length > 0) {
-                        inv.items.forEach(item => {
-                            const safeName = `"${(item.name || '').replace(/"/g, '""')}"`;
-                            csvRows.push(`${baseInfo},${safeName},${item.unitPrice || 0},${item.quantity || 0},${item.amount || 0},${totalInfo}`);
+                        inv.items.forEach((item, index) => {
+                            const isFirstItem = index === 0;
+                            // 僅在第一列顯示發票核心資訊，後續明細列留空
+                            const rowInfo = [
+                                isFirstItem ? period : '',
+                                isFirstItem ? type : '',
+                                isFirstItem ? taxTypeLabel : '',
+                                isFirstItem ? invNo : '',
+                                isFirstItem ? date : '',
+                                isFirstItem ? taxId : '',
+                                `"${(item.name || '').replace(/"/g, '""')}"`, // 商品名稱永遠顯示
+                                item.unitPrice || 0,                          // 單價永遠顯示
+                                item.quantity || 0,                           // 數量永遠顯示
+                                item.amount || 0,                             // 品項小計永遠顯示
+                                isFirstItem ? totalNet : '',
+                                isFirstItem ? totalTax : '',
+                                isFirstItem ? totalGross : ''
+                            ];
+                            csvRows.push(rowInfo.join(','));
                         });
                     } else {
-                        csvRows.push(`${baseInfo},無明細,0,0,0,${totalInfo}`);
+                        // 無明細的情況
+                        csvRows.push(`${period},${type},${taxTypeLabel},${invNo},${date},${taxId},無明細,0,0,0,${totalNet},${totalTax},${totalGross}`);
                     }
                 });
                 
@@ -244,7 +269,7 @@
                 link.setAttribute('href', URL.createObjectURL(blob));
                 link.setAttribute('download', `發票整合報表_${periodLabel}_${typeLabel}.csv`);
                 link.style.visibility = 'hidden'; document.body.appendChild(link); link.click(); document.body.removeChild(link);
-                showToast(`已成功導出 ${typeLabel} 整合報表！`, 'success');
+                showToast(`已成功導出簡潔版 ${typeLabel} 報表！`, 'success');
             };
 
             const showToast = (message, type = 'success') => { setToast({ message, type }); setTimeout(() => setToast(null), 3000); };
@@ -338,13 +363,10 @@
                     const cleanItems = formData.items.filter(item => item.name.trim() !== '');
                     const invoiceNum = formData.invoiceNumber;
                     
-                    // --- 智能合併邏輯 ---
-                    // 尋找清單中是否已有相同發票號碼
                     const existingInv = invoices.find(inv => inv.invoiceNumber === invoiceNum);
                     let finalInvoice;
 
                     if (existingInv) {
-                        // 合併品項明細
                         const mergedItems = [...existingInv.items, ...cleanItems];
                         const calc = recalculateTotalsFromItems(mergedItems, existingInv.invoiceType, existingInv.taxRate);
                         finalInvoice = {
@@ -353,10 +375,9 @@
                             netAmount: calc.netAmount,
                             tax: calc.tax,
                             total: calc.total,
-                            date: formData.date // 更新為最新提交的日期
+                            date: formData.date 
                         };
                     } else {
-                        // 新發票
                         finalInvoice = {
                             ...formData,
                             items: cleanItems,
@@ -372,13 +393,13 @@
                         const appIdStr = typeof __app_id !== 'undefined' ? __app_id : 'github-pages-invoice-app';
                         const docRef = dbRef.current.collection('artifacts').doc(appIdStr).collection('users').doc(user.uid).collection('invoices').doc(finalInvoice.id);
                         await docRef.set(finalInvoice);
-                        showToast(existingInv ? `已整合並更新發票 ${invoiceNum}` : `已錄入新發票 (${period})`, 'success');
+                        showToast(existingInv ? `已成功追加至發票 ${invoiceNum}` : `已錄入新發票 (${period})`, 'success');
                     } else {
                         const newInvoiceList = existingInv 
                             ? invoices.map(inv => inv.id === existingInv.id ? finalInvoice : inv)
                             : [finalInvoice, ...invoices];
                         setInvoices(newInvoiceList.sort((a, b) => new Date(b.date) - new Date(a.date)));
-                        showToast(existingInv ? `已整合至本機發票 ${invoiceNum}` : `已錄入新發票至本機`, 'success');
+                        showToast(existingInv ? `已完成本地整合: ${invoiceNum}` : `已錄入新發票至本地`, 'success');
                     }
                     
                     setFormData({ ...formData, invoiceNumber: '', taxId: '', items: [], netAmount: '', tax: '', total: '' });
@@ -401,15 +422,15 @@
                 setIsScanning(true); showToast('AI 解析中...', 'info');
                 setTimeout(() => {
                     const isTri = Math.random() > 0.5;
-                    const simulatedItems = [{ id: generateItemId(), name: isTri ? '雲端授權費' : '辦公雜資', quantity: 1, unitPrice: 1500, amount: 1500 }];
+                    const simulatedItems = [{ id: generateItemId(), name: isTri ? '企業授權費' : '辦公耗材', quantity: 1, unitPrice: 1500, amount: 1500 }];
                     const calcRes = recalculateTotalsFromItems(simulatedItems, isTri ? '三聯式' : '二聯式', 0.05);
                     setFormData({
                         invoiceType: isTri ? '三聯式' : '二聯式', taxRate: 0.05,
-                        invoiceNumber: `XY-88889999`, // 故意模擬重複號碼測試整合
+                        invoiceNumber: `XY-88889999`, 
                         date: new Date().toISOString().split('T')[0],
                         taxId: isTri ? '87654321' : '', items: simulatedItems, ...calcRes
                     });
-                    setIsScanning(false); showToast('AI 辨識成功！發現相同號碼將會自動整合。', 'success');
+                    setIsScanning(false); showToast('AI 解析完畢！相同號碼將自動整合。', 'success');
                 }, 1500);
             };
 
@@ -558,10 +579,10 @@
                                         </form>
                                     </div>
                                     <div className="space-y-6">
-                                        <div className="bg-slate-900 rounded-2xl p-6 text-white relative overflow-hidden flex flex-col justify-center">
+                                        <div className="bg-slate-900 rounded-2xl p-6 text-white relative overflow-hidden flex flex-col justify-center text-center">
                                             <i className="ph ph-intersect absolute -right-4 -bottom-4 text-8xl opacity-10"></i>
-                                            <h3 className="text-lg font-bold mb-2 flex items-center gap-2"><i className="ph ph-magic-wand text-blue-400"></i> 明細整合邏輯</h3>
-                                            <p className="text-slate-400 text-xs mb-4">系統現在支援偵測相同號碼。如果您錄入了一筆已存在的發票，系統會聰明地將新品項附加進去，而非建立重複記錄。</p>
+                                            <h3 className="text-lg font-bold mb-2 flex items-center justify-center gap-2"><i className="ph ph-magic-wand text-blue-400"></i> 明細整合邏輯</h3>
+                                            <p className="text-slate-400 text-xs mb-4">系統會自動根據號碼整合明細。匯出報表時，發票資訊僅會出現在首行，避免視覺混亂。</p>
                                             <button onClick={simulateAIScan} disabled={isScanning} className="w-full bg-blue-600 py-3 rounded-xl font-bold active:scale-95 transition-all text-sm">模擬整合測試 (XY-88889999)</button>
                                         </div>
                                     </div>
