@@ -11,9 +11,10 @@
     <!-- 引入 Phosphor 企業級圖示庫 -->
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
     
-    <!-- 引入 React 與 Babel (內建翻譯官) -->
+    <!-- 引入 React, ReactDOM 與 Chart.js (更穩定強大的視覺化引擎) -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
     <style>
@@ -22,8 +23,6 @@
         .animate-slide-in { animation: slideIn 0.3s ease-out forwards; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-        
-        /* 品項進場動畫 */
         @keyframes fadeInRow { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: translateX(0); } }
         .animate-fade-in-row { animation: fadeInRow 0.2s ease-out forwards; }
     </style>
@@ -34,6 +33,9 @@
 
     <script type="text/babel">
         const { useState, useEffect, useRef, useMemo } = React;
+
+        // 圖表配色票
+        const COLORS = ['#4f46e5', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
 
         const INITIAL_INVOICES = [
             { id: '1', invoiceNumber: 'AB-12345678', date: '2026-04-01', invoiceType: '三聯式', taxId: '23456789', netAmount: 1000, tax: 50, total: 1050, items: [{id: 1, name: '高階機械鍵盤', quantity: 1, unitPrice: 1000, amount: 1000}], status: 'verified' },
@@ -53,7 +55,6 @@
             return `${year}年 ${pad(periodStart)}-${pad(periodEnd)}月`;
         };
 
-        // 產生獨立的品項 ID
         const generateItemId = () => Math.random().toString(36).substr(2, 9);
 
         function App() {
@@ -61,7 +62,7 @@
                 const saved = localStorage.getItem('nextgen_invoices');
                 return saved ? JSON.parse(saved) : INITIAL_INVOICES;
             });
-            const [activeTab, setActiveTab] = useState('entry');
+            const [activeTab, setActiveTab] = useState('dashboard');
             const [toast, setToast] = useState(null);
             const [selectedPeriod, setSelectedPeriod] = useState('ALL');
             
@@ -71,7 +72,7 @@
                 invoiceNumber: '',
                 date: new Date().toISOString().split('T')[0],
                 taxId: '',
-                items: [], // 新增：品項陣列
+                items: [],
                 netAmount: '',
                 tax: '',
                 total: ''
@@ -80,6 +81,12 @@
             const [isScanning, setIsScanning] = useState(false);
             const [errors, setErrors] = useState({});
             const invoiceInputRef = useRef(null);
+
+            // Chart.js 的 Canvas Refs
+            const barChartRef = useRef(null);
+            const pieChartRef = useRef(null);
+            const barChartInstance = useRef(null);
+            const pieChartInstance = useRef(null);
 
             useEffect(() => {
                 localStorage.setItem('nextgen_invoices', JSON.stringify(invoices));
@@ -101,36 +108,159 @@
                 }
             }, [availablePeriods, selectedPeriod]);
 
+            // --- 圖表數據處理邏輯 ---
+            const taxDistributionData = useMemo(() => {
+                const taxable = filteredInvoices.filter(inv => inv.tax > 0).reduce((sum, inv) => sum + inv.total, 0);
+                const taxFree = filteredInvoices.filter(inv => inv.tax === 0).reduce((sum, inv) => sum + inv.total, 0);
+                return [
+                    { name: '應稅銷售額 (5%)', value: taxable },
+                    { name: '免稅銷售額 (0%)', value: taxFree }
+                ].filter(d => d.value > 0);
+            }, [filteredInvoices]);
+
+            const topItemsData = useMemo(() => {
+                const itemMap = {};
+                filteredInvoices.forEach(inv => {
+                    if (inv.items && inv.items.length > 0) {
+                        inv.items.forEach(item => {
+                            if (item.name) {
+                                itemMap[item.name] = (itemMap[item.name] || 0) + item.amount;
+                            }
+                        });
+                    } else if (inv.netAmount > 0) {
+                        itemMap['無明細銷售'] = (itemMap['無明細銷售'] || 0) + inv.netAmount;
+                    }
+                });
+
+                return Object.keys(itemMap)
+                    .map(key => ({ name: key, sales: itemMap[key] }))
+                    .sort((a, b) => b.sales - a.sales)
+                    .slice(0, 5);
+            }, [filteredInvoices]);
+
+            // --- 初始化與更新 Chart.js 圖表 ---
+            useEffect(() => {
+                if (activeTab === 'dashboard' && topItemsData.length > 0 && barChartRef.current) {
+                    if (barChartInstance.current) barChartInstance.current.destroy();
+                    
+                    barChartInstance.current = new Chart(barChartRef.current, {
+                        type: 'bar',
+                        data: {
+                            labels: topItemsData.map(d => d.name),
+                            datasets: [{
+                                label: '銷售額 ($)',
+                                data: topItemsData.map(d => d.sales),
+                                backgroundColor: COLORS,
+                                borderRadius: 6
+                            }]
+                        },
+                        options: {
+                            indexAxis: 'y',
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: { display: false },
+                                tooltip: {
+                                    backgroundColor: '#0f172a',
+                                    titleFont: { size: 14, family: "'Segoe UI', sans-serif" },
+                                    bodyFont: { size: 14, weight: 'bold', family: "monospace" },
+                                    padding: 12,
+                                    displayColors: false,
+                                    callbacks: {
+                                        label: function(context) {
+                                            return '$' + context.raw.toLocaleString();
+                                        }
+                                    }
+                                }
+                            },
+                            scales: {
+                                x: { display: false, grid: { display: false } },
+                                y: { border: { display: false }, grid: { display: false }, ticks: { font: { size: 12, family: "'Segoe UI', sans-serif" }, color: '#64748b' } }
+                            }
+                        }
+                    });
+                }
+                return () => {
+                    if (barChartInstance.current) barChartInstance.current.destroy();
+                };
+            }, [activeTab, topItemsData]);
+
+            useEffect(() => {
+                if (activeTab === 'dashboard' && taxDistributionData.length > 0 && pieChartRef.current) {
+                    if (pieChartInstance.current) pieChartInstance.current.destroy();
+
+                    pieChartInstance.current = new Chart(pieChartRef.current, {
+                        type: 'doughnut',
+                        data: {
+                            labels: taxDistributionData.map(d => d.name),
+                            datasets: [{
+                                data: taxDistributionData.map(d => d.value),
+                                backgroundColor: ['#4f46e5', '#10b981'],
+                                borderWidth: 0,
+                                hoverOffset: 4
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            cutout: '70%',
+                            plugins: {
+                                legend: { position: 'bottom', labels: { usePointStyle: true, padding: 20, font: { family: "'Segoe UI', sans-serif" }, color: '#64748b' } },
+                                tooltip: {
+                                    backgroundColor: '#0f172a',
+                                    titleFont: { size: 14, family: "'Segoe UI', sans-serif" },
+                                    bodyFont: { size: 14, weight: 'bold', family: "monospace" },
+                                    padding: 12,
+                                    displayColors: false,
+                                    callbacks: {
+                                        label: function(context) {
+                                            return '$' + context.raw.toLocaleString();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+                return () => {
+                    if (pieChartInstance.current) pieChartInstance.current.destroy();
+                };
+            }, [activeTab, taxDistributionData]);
+
             const exportToCSV = () => {
                 if (filteredInvoices.length === 0) {
                     showToast('目前篩選的期別沒有資料可以匯出喔！', 'info');
                     return;
                 }
-                const headers = ['期別', '發票類型', '稅別', '發票號碼', '開立日期', '買受人統編', '品項明細', '銷售額(未稅)', '營業稅', '總計(含稅)'];
-                const csvContent = [
-                    headers.join(','),
-                    ...filteredInvoices.map(inv => {
-                        const taxTypeLabel = inv.tax === 0 ? '免稅' : '應稅';
-                        const itemsStr = inv.items && inv.items.length > 0 
-                            ? inv.items.map(i => `${i.name}(x${i.quantity})`).join('; ') 
-                            : '無明細';
-                        // 處理可能包含逗號的字串
-                        const safeItemsStr = `"${itemsStr.replace(/"/g, '""')}"`;
-                        
-                        return `${getInvoicePeriod(inv.date)},${inv.invoiceType},${taxTypeLabel},${inv.invoiceNumber},${inv.date},${inv.taxId || ''},${safeItemsStr},${inv.netAmount},${inv.tax},${inv.total}`;
-                    })
-                ].join('\n');
+                const headers = ['期別', '發票類型', '稅別', '發票號碼', '開立日期', '買受人統編', '品項名稱', '單價', '數量', '品項小計', '整筆銷售額(未稅)', '整筆營業稅', '整筆總計(含稅)'];
+                const csvRows = [headers.join(',')];
 
+                filteredInvoices.forEach(inv => {
+                    const taxTypeLabel = inv.tax === 0 ? '免稅' : '應稅';
+                    const baseInfo = `${getInvoicePeriod(inv.date)},${inv.invoiceType},${taxTypeLabel},${inv.invoiceNumber},${inv.date},${inv.taxId || ''}`;
+                    const totalInfo = `${inv.netAmount},${inv.tax},${inv.total}`;
+
+                    if (inv.items && inv.items.length > 0) {
+                        inv.items.forEach(item => {
+                            const safeName = `"${(item.name || '').replace(/"/g, '""')}"`;
+                            csvRows.push(`${baseInfo},${safeName},${item.unitPrice || 0},${item.quantity || 0},${item.amount || 0},${totalInfo}`);
+                        });
+                    } else {
+                        csvRows.push(`${baseInfo},無明細,0,0,0,${totalInfo}`);
+                    }
+                });
+
+                const csvContent = csvRows.join('\n');
                 const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
                 const link = document.createElement('a');
                 const url = URL.createObjectURL(blob);
                 link.setAttribute('href', url);
-                link.setAttribute('download', `發票財務報表_${selectedPeriod === 'ALL' ? '全部' : selectedPeriod}.csv`);
+                link.setAttribute('download', `發票財務報表_明細展開版_${selectedPeriod === 'ALL' ? '全部' : selectedPeriod}.csv`);
                 link.style.visibility = 'hidden';
                 document.body.appendChild(link);
                 link.click();
                 document.body.removeChild(link);
-                showToast(`已成功匯出 ${selectedPeriod === 'ALL' ? '全部' : selectedPeriod} 的報表！`, 'success');
+                showToast(`已成功匯出扁平化明細報表！分析起來更得心應手。`, 'success');
             };
 
             const showToast = (message, type = 'success') => {
@@ -150,7 +280,6 @@
                     if (!formData.total || isNaN(formData.total)) newErrors.total = '請輸入有效總計金額';
                 }
                 
-                // 品項驗證
                 formData.items.forEach((item, index) => {
                     if (!item.name.trim()) newErrors[`item_name_${index}`] = '請輸入名稱';
                 });
@@ -159,22 +288,16 @@
                 return Object.keys(newErrors).length === 0;
             };
 
-            // 核心功能：根據品項陣列，自動重新計算總額
             const recalculateTotalsFromItems = (itemsToCalc, currentType, currentRate) => {
                 const sumAmount = itemsToCalc.reduce((acc, item) => acc + (item.amount || 0), 0);
-                
-                let newNet = '';
-                let newTax = '';
-                let newTotal = '';
+                let newNet = ''; let newTax = ''; let newTotal = '';
 
                 if (itemsToCalc.length > 0 && sumAmount > 0) {
                     if (currentType === '三聯式') {
-                        // 三聯式：品項金額代表未稅額
                         newNet = sumAmount;
                         newTax = Math.round(sumAmount * currentRate);
                         newTotal = sumAmount + newTax;
                     } else {
-                        // 二聯式：品項金額代表含稅額
                         newTotal = sumAmount;
                         newNet = Math.round(sumAmount / (1 + currentRate));
                         newTax = sumAmount - newNet;
@@ -185,12 +308,10 @@
 
             const handleTaxRateChange = (rate) => {
                 let newFormData = { ...formData, taxRate: rate };
-                
                 if (newFormData.items.length > 0) {
                     const calcRes = recalculateTotalsFromItems(newFormData.items, newFormData.invoiceType, rate);
                     newFormData = { ...newFormData, ...calcRes };
                 } else {
-                    // 若無品項，依照原先的手動輸入邏輯
                     if (newFormData.invoiceType === '三聯式' && newFormData.netAmount && !isNaN(newFormData.netAmount)) {
                         const net = parseInt(newFormData.netAmount, 10);
                         newFormData.tax = Math.round(net * rate);
@@ -210,8 +331,6 @@
 
                 if (name === 'invoiceType') {
                     newFormData.taxId = ''; 
-                    
-                    // 切換類型時，若有品項，需重新計算總額邏輯
                     if (newFormData.items.length > 0) {
                         const calcRes = recalculateTotalsFromItems(newFormData.items, value, newFormData.taxRate);
                         newFormData = { ...newFormData, ...calcRes };
@@ -220,7 +339,6 @@
                     }
                 }
 
-                // 只有在【沒有品項】時，才允許手動觸發金額連動計算
                 if (newFormData.items.length === 0) {
                     if (name === 'netAmount' && newFormData.invoiceType === '三聯式' && value && !isNaN(value)) {
                         const net = parseInt(value, 10);
@@ -240,7 +358,6 @@
                     if (formatted.length > 2) formatted = formatted.substring(0, 2) + '-' + formatted.substring(2, 10);
                     newFormData[name] = formatted;
                 }
-                
                 if (name === 'taxId') {
                     newFormData[name] = value.replace(/[^\d]/g, '').substring(0, 8);
                 }
@@ -249,7 +366,6 @@
                 if (errors[name]) setErrors({ ...errors, [name]: null });
             };
 
-            // --- 品項專屬操作 ---
             const handleItemChange = (index, field, value) => {
                 const newItems = [...formData.items];
                 const item = newItems[index];
@@ -257,7 +373,6 @@
                 if (field === 'quantity' || field === 'unitPrice') {
                     const numValue = value === '' ? '' : parseFloat(value);
                     item[field] = numValue;
-                    
                     const q = parseFloat(item.quantity) || 0;
                     const p = parseFloat(item.unitPrice) || 0;
                     item.amount = Math.round(q * p);
@@ -265,14 +380,11 @@
                     item[field] = value;
                 }
                 
-                // 移除對應的錯誤提示
                 if (errors[`item_name_${index}`] && field === 'name') {
                     setErrors({ ...errors, [`item_name_${index}`]: null });
                 }
 
                 let newFormData = { ...formData, items: newItems };
-                
-                // 自動更新總計
                 const calcRes = recalculateTotalsFromItems(newItems, newFormData.invoiceType, newFormData.taxRate);
                 newFormData = { ...newFormData, ...calcRes };
                 
@@ -290,20 +402,16 @@
                 const newItems = formData.items.filter((_, i) => i !== index);
                 let newFormData = { ...formData, items: newItems };
                 
-                // 自動更新總計 (若清空品項，則保留當前總計讓使用者手動改)
                 if (newItems.length > 0) {
                     const calcRes = recalculateTotalsFromItems(newItems, newFormData.invoiceType, newFormData.taxRate);
                     newFormData = { ...newFormData, ...calcRes };
                 }
-                
                 setFormData(newFormData);
             };
-            // -------------------
 
             const handleSubmit = (e) => {
                 e.preventDefault();
                 if (validateForm()) {
-                    // 過濾掉未填寫的空品項 (防呆)
                     const cleanItems = formData.items.filter(item => item.name.trim() !== '');
 
                     const newInvoice = {
@@ -318,10 +426,8 @@
                     const period = getInvoicePeriod(formData.date);
                     const updatedInvoices = [newInvoice, ...invoices].sort((a, b) => new Date(b.date) - new Date(a.date));
                     setInvoices(updatedInvoices);
-                    
                     showToast(`發票已歸檔至 ${period}！`, 'success');
                     
-                    // 重置表單，保留發票類型與日期
                     setFormData({ ...formData, invoiceNumber: '', taxId: '', items: [], netAmount: '', tax: '', total: '' });
                     
                     if (window.innerWidth > 768) {
@@ -341,13 +447,12 @@
 
             const simulateAIScan = () => {
                 setIsScanning(true);
-                showToast('AI 視覺模組啟動中，正在解析明細...', 'info');
+                showToast('AI 視覺模組啟動中...', 'info');
                 setTimeout(() => {
                     const isTri = Math.random() > 0.5;
                     const isTaxFree = Math.random() > 0.8;
                     const currentTaxRate = isTaxFree ? 0 : 0.05;
                     
-                    // AI 模擬自動生成品項
                     const item1Price = Math.floor(Math.random() * 3000) + 500;
                     const item2Price = Math.floor(Math.random() * 2000) + 200;
                     const simulatedItems = [
@@ -390,7 +495,6 @@
                 </div>
             );
 
-            // 判斷是否鎖定金額欄位 (當有輸入明細時，交由引擎全自動計算)
             const isAmountLockedByItems = formData.items.length > 0;
 
             return (
@@ -478,6 +582,7 @@
                                 </div>
                             </header>
 
+                            {/* 錄入與清單分頁保持不變 */}
                             {activeTab === 'entry' && (
                                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 md:gap-8">
                                     <div className="lg:col-span-2 bg-white rounded-2xl shadow-sm border border-slate-200 p-5 md:p-8">
@@ -525,7 +630,7 @@
                                                 {errors.taxId && <p className="text-red-500 text-xs mt-1">{errors.taxId}</p>}
                                             </div>
 
-                                            {/* 新增：發票明細 (品項) 區塊 */}
+                                            {/* 發票明細區塊 */}
                                             <div className="pt-2 border-t border-slate-100">
                                                 <div className="flex items-center justify-between mb-3">
                                                     <div className="flex items-center gap-2 text-slate-700">
@@ -598,7 +703,6 @@
                                                 </div>
 
                                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4 relative">
-                                                    {/* 若鎖定，加上一層透明遮罩防止點擊，但保留視覺 */}
                                                     {isAmountLockedByItems && <div className="absolute inset-0 z-10 cursor-not-allowed"></div>}
 
                                                     <div className={`space-y-1 md:space-y-2 flex flex-row md:flex-col items-center md:items-start justify-between md:justify-start ${formData.invoiceType === '二聯式' && formData.taxRate !== 0 ? 'opacity-70' : ''}`}>
@@ -711,13 +815,16 @@
                                 </div>
                             )}
 
+                            {/* 升級為 Chart.js 的儀表板區塊 */}
                             {activeTab === 'dashboard' && (
-                                <div className="animate-slide-in">
-                                    <div className="mb-4 md:mb-6 flex items-center justify-between">
+                                <div className="animate-slide-in space-y-6">
+                                    <div className="mb-4 flex items-center justify-between">
                                         <h3 className="text-lg md:text-xl font-bold text-slate-700">
                                             {selectedPeriod === 'ALL' ? '累積財務總覽' : `${selectedPeriod} 報表`}
                                         </h3>
                                     </div>
+                                    
+                                    {/* 核心數字卡片 */}
                                     <div className="grid grid-cols-2 md:grid-cols-3 gap-4 md:gap-6">
                                         <div className="col-span-2 md:col-span-1 bg-white p-5 md:p-6 rounded-2xl shadow-sm border border-slate-200">
                                             <div className="text-slate-500 text-xs md:text-sm font-bold mb-1 md:mb-2">處理發票數</div>
@@ -731,6 +838,45 @@
                                             <div className="text-indigo-100 text-xs md:text-sm font-bold mb-1 md:mb-2">發票總額(含稅)</div>
                                             <div className="text-xl md:text-4xl font-black font-mono">${totalAmount.toLocaleString()}</div>
                                             <div className="mt-2 md:mt-4 text-[10px] md:text-sm text-indigo-200 font-medium">營業稅: ${totalTax.toLocaleString()}</div>
+                                        </div>
+                                    </div>
+
+                                    {/* 視覺化圖表區塊 */}
+                                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                        {/* 長條圖：品項銷售排行 */}
+                                        <div className="bg-white p-5 md:p-6 rounded-2xl shadow-sm border border-slate-200">
+                                            <div className="flex items-center gap-2 mb-6">
+                                                <div className="p-2 bg-indigo-50 rounded-lg text-indigo-600"><i className="ph-fill ph-chart-bar text-xl"></i></div>
+                                                <h4 className="font-bold text-slate-700">熱門品項銷售排行 (Top 5)</h4>
+                                            </div>
+                                            {topItemsData.length > 0 ? (
+                                                <div className="h-64 w-full relative">
+                                                    <canvas ref={barChartRef}></canvas>
+                                                </div>
+                                            ) : (
+                                                <div className="h-64 flex flex-col items-center justify-center text-slate-400">
+                                                    <i className="ph ph-chart-line-down text-4xl mb-2"></i>
+                                                    <p className="text-sm">本期尚無足夠數據可供分析</p>
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {/* 甜甜圈圖：稅務結構分佈 */}
+                                        <div className="bg-white p-5 md:p-6 rounded-2xl shadow-sm border border-slate-200">
+                                            <div className="flex items-center gap-2 mb-6">
+                                                <div className="p-2 bg-emerald-50 rounded-lg text-emerald-600"><i className="ph-fill ph-chart-donut text-xl"></i></div>
+                                                <h4 className="font-bold text-slate-700">稅務結構與合規比例</h4>
+                                            </div>
+                                            {taxDistributionData.length > 0 ? (
+                                                <div className="h-64 w-full relative">
+                                                    <canvas ref={pieChartRef}></canvas>
+                                                </div>
+                                            ) : (
+                                                <div className="h-64 flex flex-col items-center justify-center text-slate-400">
+                                                    <i className="ph ph-chart-pie-slice text-4xl mb-2"></i>
+                                                    <p className="text-sm">本期無交易紀錄</p>
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 </div>
