@@ -195,7 +195,7 @@
                 showToast("報表下載成功");
             };
 
-            // --- CSV 復原引擎 (點 1) ---
+            // --- CSV 復原引擎 ---
             const importCSV = (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
@@ -208,9 +208,7 @@
                         if (lines.length < 2) throw new Error("無效的 CSV 檔案");
 
                         const invoiceMap = new Map();
-                        // 跳過 Header
                         for (let i = 1; i < lines.length; i++) {
-                            // 考慮到可能含有逗號的處理 (簡單版，不支援品名內含逗號)
                             const cols = lines[i].split(',').map(c => c.trim());
                             if (cols.length < 10) continue;
 
@@ -232,7 +230,7 @@
                             }
 
                             const inv = invoiceMap.get(invNum);
-                            if (cols[10]) { // 如果有品項名稱
+                            if (cols[10]) {
                                 inv.items.push({
                                     id: generateItemId() + i,
                                     name: cols[10],
@@ -246,7 +244,7 @@
 
                         const importedInvoices = Array.from(invoiceMap.values());
                         if (importedInvoices.length > 0) {
-                            setInvoices(importedInvoices); // 完全覆蓋模式，以還原為準
+                            setInvoices(importedInvoices);
                             showToast(`還原成功！已讀取 ${importedInvoices.length} 張發票`, "success");
                         }
                     } catch (err) {
@@ -254,7 +252,7 @@
                     }
                 };
                 reader.readAsText(file);
-                e.target.value = null; // 重置 input
+                e.target.value = null;
             };
 
             const availablePeriods = useMemo(() => {
@@ -264,7 +262,6 @@
 
             return (
                 <div className="flex flex-col md:flex-row h-screen bg-slate-50 overflow-hidden relative">
-                    {/* 側邊導航 */}
                     <aside className="hidden md:flex w-72 bg-slate-900 text-slate-300 flex-col shadow-2xl flex-shrink-0">
                         <div className="p-8 border-b border-slate-800 text-center">
                             <h1 className="text-xl font-black text-white flex items-center justify-center gap-2 italic">
@@ -277,13 +274,13 @@
                             <button onClick={() => setActiveTab('entry')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all ${activeTab === 'entry' ? 'bg-indigo-600 text-white shadow-lg' : 'hover:bg-slate-800'}`}><i className="ph ph-plus-square text-xl"></i> 智能錄入</button>
                             <button onClick={() => setActiveTab('list')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all ${activeTab === 'list' ? 'bg-indigo-600 text-white shadow-lg' : 'hover:bg-slate-800'}`}><i className="ph ph-list-numbers text-xl"></i> 整合清單</button>
                         </nav>
-                        <div className="p-6 mt-auto border-t border-slate-800">
-                            <div className="bg-slate-800 rounded-2xl p-4 border border-slate-700 text-center">
+                        <div className="p-6 mt-auto border-t border-slate-800 text-center">
+                            <div className="bg-slate-800 rounded-2xl p-4 border border-slate-700">
                                 <div className="text-[10px] font-bold text-slate-500 uppercase mb-2 tracking-widest">Database Node Status</div>
                                 <div className="flex items-center justify-center gap-2">
                                     <div className={`w-2.5 h-2.5 rounded-full ${syncStatus === 'syncing' ? 'bg-amber-400 animate-pulse' : syncStatus === 'error' ? 'bg-red-500' : 'bg-emerald-500'}`}></div>
-                                    <span className="text-[10px] font-bold text-slate-300 uppercase tracking-tighter">
-                                        {syncStatus === 'syncing' ? 'Cloud Syncing...' : syncStatus === 'error' ? 'Sync Error' : 'Database Secure'}
+                                    <span className="text-[10px] font-bold text-slate-300 uppercase">
+                                        {syncStatus === 'syncing' ? 'Mirroring...' : syncStatus === 'error' ? 'Sync Error' : 'Safe'}
                                     </span>
                                 </div>
                             </div>
@@ -295,20 +292,13 @@
 
                         {activeTab === 'help' && (
                             <div className="max-w-4xl mx-auto space-y-12 animate-slide-in">
-                                <header className="bg-gradient-to-br from-indigo-900 via-indigo-800 to-slate-900 p-12 rounded-[3.5rem] text-white shadow-2xl relative overflow-hidden text-center">
-                                    <h2 className="text-4xl font-black mb-4 tracking-tight">CSV 還原與備援導航</h2>
-                                    <p className="text-indigo-200 text-lg font-medium italic">「支援 CSV 格式匯入，實現數據真正的跨平台自由。」</p>
+                                <header className="bg-gradient-to-br from-indigo-900 via-indigo-800 to-slate-900 p-12 rounded-[3.5rem] text-white shadow-2xl text-center">
+                                    <h2 className="text-4xl font-black mb-4">CSV 還原與多維度篩選</h2>
+                                    <p className="text-indigo-200 text-lg font-medium italic">「提供極致的資料靈活性，讓財務流程精確無誤。」</p>
                                 </header>
-
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                                    <div className="bg-white p-8 rounded-[2rem] border shadow-sm">
-                                        <h4 className="font-black text-indigo-700 mb-4 flex items-center gap-2"><i className="ph ph-file-csv text-2xl"></i> CSV 匯入還原邏輯</h4>
-                                        <p className="text-sm text-slate-500 leading-relaxed font-medium">系統能辨識匯出的 CSV 明細格式。匯入時，系統會自動根據「發票號碼」將多行品項歸納，還原為完整的發票物件。<b>這是在不依賴 JSON 備份時的最佳恢復手段。</b></p>
-                                    </div>
-                                    <div className="bg-white p-8 rounded-[2rem] border shadow-sm">
-                                        <h4 className="font-black text-emerald-700 mb-4 flex items-center gap-2"><i className="ph ph-shield-check text-2xl"></i> 雲端鏡像保護</h4>
-                                        <p className="text-sm text-slate-500 leading-relaxed font-medium">每一筆透過手動錄入或 CSV 匯入的資料，都會經由 Supabase 引擎自動鏡像同步。側邊欄底部的指示器即是您的數據保險箱狀態。</p>
-                                    </div>
+                                    <div className="bg-white p-8 rounded-[2rem] border shadow-sm"><h4 className="font-black text-indigo-700 mb-4">智能篩選引擎</h4><p className="text-sm text-slate-500 leading-relaxed font-medium">清單頁面現在支援「月份期別」與「發票類型」雙重篩選，您可以精確隔離 B2B 與 B2C 資料進行個別導出或核對。</p></div>
+                                    <div className="bg-white p-8 rounded-[2rem] border shadow-sm"><h4 className="font-black text-emerald-700 mb-4">數據循環還原</h4><p className="text-sm text-slate-500 leading-relaxed font-medium">支援從 CSV 格式全量還原發票明細，系統會自動處理多品項的資料聚合，確保雲端備份與本地資料高度一致。</p></div>
                                 </div>
                             </div>
                         )}
@@ -321,9 +311,9 @@
                                     <div className="bg-indigo-600 p-6 rounded-3xl shadow-xl text-white"><div className="text-xs font-bold text-indigo-200 uppercase">含稅營收</div><div className="text-4xl font-black font-mono mt-1">${invoices.filter(i=>i.status!=='void').reduce((s,i)=>s+(i.total||0),0).toLocaleString()}</div></div>
                                     <div className="bg-white p-6 rounded-3xl border shadow-sm"><div className="text-xs font-bold text-slate-400">營業稅預估</div><div className="text-4xl font-black text-indigo-600 mt-1">${invoices.filter(i=>i.status!=='void').reduce((s,i)=>s+(i.tax||0),0).toLocaleString()}</div></div>
                                 </div>
-                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 pt-4">
-                                    <div className="bg-white p-8 rounded-[2.5rem] border shadow-sm h-80"><h4 className="font-black text-slate-800 mb-4">營收趨勢趨勢</h4><div className="h-60"><canvas ref={chartRefs.line}></canvas></div></div>
-                                    <div className="bg-white p-8 rounded-[2.5rem] border shadow-sm h-80"><h4 className="font-black text-slate-800 mb-4">熱銷品項 Top 5</h4><div className="h-60"><canvas ref={chartRefs.bar}></canvas></div></div>
+                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 pt-4 h-80">
+                                    <div className="bg-white p-8 rounded-[2.5rem] border shadow-sm"><h4 className="font-black text-slate-800 mb-4">營收趨勢趨勢</h4><div className="h-60"><canvas ref={chartRefs.line}></canvas></div></div>
+                                    <div className="bg-white p-8 rounded-[2.5rem] border shadow-sm"><h4 className="font-black text-slate-800 mb-4">熱銷品項 Top 5</h4><div className="h-60"><canvas ref={chartRefs.bar}></canvas></div></div>
                                 </div>
                             </div>
                         )}
@@ -345,45 +335,20 @@
                                             <div className="space-y-1"><label className="text-[10px] font-bold text-slate-400 uppercase">日期</label><input type="date" name="date" value={formData.date} onChange={handleInputChange} className="w-full px-4 py-3 rounded-2xl border outline-none" /></div>
                                             {formData.invoiceType==='三聯式' && <div className="space-y-1"><label className="text-[10px] font-bold text-indigo-500 uppercase">統編 (8碼)</label><input type="text" name="taxId" value={formData.taxId} onChange={handleInputChange} maxLength={8} className="w-full px-4 py-3 rounded-2xl border bg-indigo-50/30 font-mono outline-none" /></div>}
                                         </div>
-                                        
-                                        <div className="pt-6 border-t">
-                                            <div className="flex justify-between items-center mb-4"><h3 className="font-bold flex items-center gap-2"><i className="ph ph-shopping-bag text-indigo-500"></i> 品項細節錄入</h3><button type="button" onClick={()=>setFormData(p=>({...p, items:[...p.items, {id:generateItemId(), name:'', specs:'', quantity:1, unitPrice:'', amount:0}]}))} className="text-xs font-bold text-indigo-600 hover:bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-100">+ 新增品項</button></div>
+                                        <div className="pt-6 border-t"><div className="flex justify-between items-center mb-4"><h3 className="font-bold flex items-center gap-2"><i className="ph ph-shopping-bag text-indigo-500"></i> 品項細節錄入</h3><button type="button" onClick={()=>setFormData(p=>({...p, items:[...p.items, {id:generateItemId(), name:'', specs:'', quantity:1, unitPrice:'', amount:0}]}))} className="text-xs font-bold text-indigo-600 hover:bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-100">+ 新增品項</button></div>
                                             <div className="space-y-3">
                                                 {formData.items.map((it, i) => (
                                                     <div key={it.id} className="flex flex-col md:flex-row gap-3 p-5 bg-slate-50 rounded-2xl border relative group transition-all hover:bg-white hover:shadow-md">
-                                                        <div className="flex-1 flex flex-col gap-2">
-                                                            <input type="text" placeholder="品名內容" value={it.name} onChange={e=>handleItemChange(i, 'name', e.target.value)} className="bg-transparent text-sm font-bold outline-none" />
-                                                            <input type="text" placeholder="規格描述" value={it.specs} onChange={e=>handleItemChange(i, 'specs', e.target.value)} className="bg-transparent text-[10px] text-slate-400 outline-none italic" />
-                                                        </div>
-                                                        <div className="flex gap-4">
-                                                            <div className="flex flex-col"><label className="text-[8px] text-slate-400 font-bold mb-1 uppercase">數量</label><input type="number" onKeyDown={(e) => ["-", "e", "+"].includes(e.key) && e.preventDefault()} value={it.quantity} onChange={e=>handleItemChange(i, 'quantity', e.target.value)} className="w-16 py-1 px-2 text-center text-sm rounded-lg border bg-white outline-none font-mono" /></div>
-                                                            <div className="flex flex-col"><label className="text-[8px] text-slate-400 font-bold mb-1 uppercase">單價</label><input type="number" onKeyDown={(e) => ["-", "e", "+"].includes(e.key) && e.preventDefault()} value={it.unitPrice} onChange={e=>handleItemChange(i, 'unitPrice', e.target.value)} className="w-24 py-1 px-2 text-right text-sm rounded-lg border bg-white outline-none font-mono" /></div>
-                                                            <div className="flex flex-col items-end"><label className="text-[8px] text-slate-400 font-bold mb-1 uppercase">小計</label><div className="w-24 text-right font-black text-indigo-600 text-sm py-1">${(it.amount||0).toLocaleString()}</div></div>
-                                                        </div>
+                                                        <div className="flex-1 flex flex-col gap-2"><input type="text" placeholder="品名內容" value={it.name} onChange={e=>handleItemChange(i, 'name', e.target.value)} className="bg-transparent text-sm font-bold outline-none" /><input type="text" placeholder="規格描述" value={it.specs} onChange={e=>handleItemChange(i, 'specs', e.target.value)} className="bg-transparent text-[10px] text-slate-400 outline-none italic" /></div>
+                                                        <div className="flex gap-4"><div className="flex flex-col"><label className="text-[8px] text-slate-400 font-bold mb-1 uppercase">數量</label><input type="number" onKeyDown={(e) => ["-", "e", "+"].includes(e.key) && e.preventDefault()} value={it.quantity} onChange={e=>handleItemChange(i, 'quantity', e.target.value)} className="w-16 py-1 px-2 text-center text-sm rounded-lg border bg-white outline-none font-mono" /></div><div className="flex flex-col"><label className="text-[8px] text-slate-400 font-bold mb-1 uppercase">單價</label><input type="number" onKeyDown={(e) => ["-", "e", "+"].includes(e.key) && e.preventDefault()} value={it.unitPrice} onChange={e=>handleItemChange(i, 'unitPrice', e.target.value)} className="w-24 py-1 px-2 text-right text-sm rounded-lg border bg-white outline-none font-mono" /></div><div className="flex flex-col items-end"><label className="text-[8px] text-slate-400 font-bold mb-1 uppercase">小計</label><div className="w-24 text-right font-black text-indigo-600 text-sm py-1">${(it.amount||0).toLocaleString()}</div></div></div>
                                                         <button type="button" onClick={()=>{const items=formData.items.filter((_,idx)=>idx!==i); setFormData({...formData, items});}} className="absolute -top-2 -right-2 bg-white rounded-full shadow-lg text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"><i className="ph-fill ph-x-circle text-2xl"></i></button>
                                                     </div>
                                                 ))}
                                             </div>
                                         </div>
-
-                                        <div className={`p-8 rounded-[2.5rem] text-white shadow-2xl transition-all ${formData.status==='void'?'bg-slate-700':'bg-indigo-900'}`}>
-                                            <div className="flex flex-col md:flex-row justify-between items-center gap-8 font-bold">
-                                                <div className="flex gap-10">
-                                                    <div><div className="text-[10px] uppercase text-indigo-300 mb-2">銷售總額 (未稅)</div><div className="text-2xl font-mono">${(formData.netAmount||0).toLocaleString()}</div></div>
-                                                    <div className="border-l border-indigo-800 pl-10">
-                                                        <div className="flex items-center gap-4 mb-2"><span className="text-[10px] text-indigo-300 uppercase">稅別</span>
-                                                            <div className="flex p-0.5 bg-white/10 rounded-md"><button type="button" onClick={()=>handleInputChange({target:{name:'taxType',value:'taxable'}})} className={`px-3 py-1 rounded text-[10px] ${formData.taxType==='taxable'?'bg-indigo-500 text-white':'text-indigo-300'}`}>應稅 5%</button><button type="button" onClick={()=>handleInputChange({target:{name:'taxType',value:'exempt'}})} className={`px-3 py-1 rounded text-[10px] ${formData.taxType==='exempt'?'bg-indigo-500 text-white':'text-indigo-300'}`}>免稅 0%</button></div>
-                                                        </div>
-                                                        <div className="text-2xl font-mono">${(formData.tax||0).toLocaleString()}</div>
-                                                    </div>
-                                                </div>
-                                                <div className="text-right md:border-l md:border-indigo-800 md:pl-12"><div className="text-[10px] uppercase text-indigo-300 tracking-widest">含稅總計</div><div className="text-5xl text-emerald-400 font-mono tracking-tighter">${(formData.total||0).toLocaleString()}</div></div>
-                                            </div>
-                                        </div>
-                                        <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 py-6 rounded-3xl font-black text-white text-2xl shadow-xl transition-all active:scale-[0.97] flex items-center justify-center gap-3">
-                                            <i className="ph-fill ph-check-circle"></i> 確認儲存錄入
-                                        </button>
-                                        <p className="text-center text-[10px] text-slate-400 italic">安全鎖啟動：Enter 鍵已禁用，請手動點擊按鈕儲存。</p>
+                                        <div className={`p-8 rounded-[2.5rem] text-white shadow-2xl transition-all ${formData.status==='void'?'bg-slate-700':'bg-indigo-900'}`}><div className="flex flex-col md:flex-row justify-between items-center gap-8 font-bold"><div className="flex gap-10"><div><div className="text-[10px] uppercase text-indigo-300 mb-2">銷售總額 (未稅)</div><div className="text-2xl font-mono">${(formData.netAmount||0).toLocaleString()}</div></div><div className="border-l border-indigo-800 pl-10"><div className="flex items-center gap-4 mb-2"><span className="text-[10px] text-indigo-300 uppercase">稅別</span><div className="flex p-0.5 bg-white/10 rounded-md"><button type="button" onClick={()=>handleInputChange({target:{name:'taxType',value:'taxable'}})} className={`px-3 py-1 rounded text-[10px] ${formData.taxType==='taxable'?'bg-indigo-500 text-white':'text-indigo-300'}`}>應稅 5%</button><button type="button" onClick={()=>handleInputChange({target:{name:'taxType',value:'exempt'}})} className={`px-3 py-1 rounded text-[10px] ${formData.taxType==='exempt'?'bg-indigo-500 text-white':'text-indigo-300'}`}>免稅 0%</button></div></div><div className="text-2xl font-mono">${(formData.tax||0).toLocaleString()}</div></div></div><div className="text-right md:border-l md:border-indigo-800 md:pl-12"><div className="text-[10px] uppercase text-indigo-300 tracking-widest">含稅總計</div><div className="text-5xl text-emerald-400 font-mono tracking-tighter">${(formData.total||0).toLocaleString()}</div></div></div></div>
+                                        <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 py-6 rounded-3xl font-black text-white text-2xl shadow-xl transition-all active:scale-[0.97] flex items-center justify-center gap-3"><i className="ph-fill ph-check-circle"></i> 確認儲存錄入</button>
+                                        <p className="text-center text-[10px] text-slate-400 italic font-bold">安全機制：Enter 鍵已禁用，請手動確認儲存。</p>
                                     </form>
                                 </div>
                             </div>
@@ -392,25 +357,26 @@
                         {activeTab === 'list' && (
                             <div className="space-y-6 animate-slide-in">
                                 <header className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
-                                    <div><h2 className="text-3xl font-black text-slate-800">整合明細清單</h2></div>
+                                    <div><h2 className="text-3xl font-black text-slate-800 tracking-tight">整合明細清單</h2></div>
                                     <div className="flex flex-wrap gap-4 w-full md:w-auto">
-                                        {/* CSV 還原按鈕 */}
-                                        <label className="bg-white border-2 border-dashed border-indigo-200 text-indigo-600 px-6 py-2.5 rounded-2xl font-black flex items-center gap-2 shadow-sm text-xs cursor-pointer hover:bg-indigo-50 transition-all">
-                                            <i className="ph ph-upload"></i> 從 CSV 還原
-                                            <input type="file" accept=".csv" onChange={importCSV} className="hidden" />
-                                        </label>
-                                        
-                                        <div className="bg-white border px-4 py-2 rounded-2xl flex items-center gap-2 shadow-sm text-xs font-bold border-slate-200">
-                                            <i className="ph ph-calendar text-indigo-500"></i>
+                                        <label className="bg-white border-2 border-dashed border-indigo-200 text-indigo-600 px-6 py-2.5 rounded-2xl font-black flex items-center gap-2 shadow-sm text-xs cursor-pointer hover:bg-indigo-50 transition-all"><i className="ph ph-upload"></i> 從 CSV 還原<input type="file" accept=".csv" onChange={importCSV} className="hidden" /></label>
+                                        <div className="bg-white border px-4 py-2 rounded-2xl flex items-center gap-2 shadow-sm text-xs font-bold border-slate-200"><i className="ph ph-calendar text-indigo-500"></i>
                                             <select value={filterPeriod} onChange={e=>setFilterPeriod(e.target.value)} className="outline-none bg-transparent">
                                                 <option value="ALL">全部月份期別</option>
                                                 {availablePeriods.map(p=><option key={p} value={p}>{p}</option>)}
                                             </select>
                                         </div>
+                                        {/* 新增發票類型篩選器 */}
+                                        <div className="bg-white border px-4 py-2 rounded-2xl flex items-center gap-2 shadow-sm text-xs font-bold border-slate-200"><i className="ph ph-funnel text-amber-500"></i>
+                                            <select value={filterType} onChange={e=>setFilterType(e.target.value)} className="outline-none bg-transparent">
+                                                <option value="ALL">全部發票類型</option>
+                                                <option value="三聯式">三聯式 (B2B)</option>
+                                                <option value="二聯式">二聯式 (B2C)</option>
+                                            </select>
+                                        </div>
                                         <button onClick={exportCSV} className="bg-emerald-600 text-white px-8 py-3 rounded-2xl font-black flex items-center gap-2 shadow-lg text-xs hover:bg-emerald-700 transition-colors"><i className="ph ph-download"></i> 導出 CSV</button>
                                     </div>
                                 </header>
-                                
                                 <div className="bg-white rounded-[2.5rem] border border-slate-200 overflow-hidden shadow-sm">
                                     <table className="w-full text-left">
                                         <thead className="bg-slate-50 text-[10px] font-black text-slate-400 tracking-widest border-b uppercase">
@@ -426,7 +392,7 @@
                                                     <tr onClick={()=>setExpandedInvoiceId(expandedInvoiceId===inv.id?null:inv.id)} className="cursor-pointer hover:bg-slate-50 transition-all">
                                                         <td className={`p-6 font-black font-mono text-lg ${inv.status==='void'?'line-through text-slate-300':'text-slate-800'}`}>{inv.invoiceNumber}</td>
                                                         <td className="p-6 text-sm text-slate-500"><div className="font-bold text-slate-700">{getInvoicePeriod(inv.date)}</div><div className="text-[10px] font-bold text-slate-300 uppercase">{inv.taxId || '二聯/無統編'}</div></td>
-                                                        <td className="p-6 text-center">{inv.status==='void'?<span className="bg-red-50 text-red-600 px-3 py-1 rounded-full text-[10px] font-black border border-red-100">作廢</span>:<span className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full text-[10px] font-black border border-emerald-100">正常</span>}</td>
+                                                        <td className="p-6 text-center">{inv.status==='void'?<span className="bg-red-50 text-red-600 px-3 py-1 rounded-full text-[10px] font-black border border-red-100">作廢</span>:<span className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full text-[10px] font-black border border-emerald-200">正常</span>}</td>
                                                         <td className={`p-6 text-right font-black font-mono text-xl ${inv.status==='void'?'text-slate-300':'text-indigo-700'}`}>${(inv.total||0).toLocaleString()}</td>
                                                         <td className="p-6 text-center"><button onClick={(e)=>{e.stopPropagation(); setInvoices(invoices.filter(i=>i.id!==inv.id));}} className="text-slate-300 hover:text-red-500 transition-colors"><i className="ph-fill ph-trash-simple text-2xl"></i></button></td>
                                                     </tr>
@@ -450,6 +416,7 @@
                                                     )}
                                                 </Fragment>
                                             ))}
+                                            {invoices.length === 0 && <tr><td colSpan="5" className="p-20 text-center text-slate-300 font-bold italic underline">目前尚無錄入數據，請先新增發票。</td></tr>}
                                         </tbody>
                                     </table>
                                 </div>
@@ -457,7 +424,6 @@
                         )}
                     </main>
                     
-                    {/* 手機導航 */}
                     <nav className="md:hidden fixed bottom-0 w-full bg-white border-t p-4 z-50 flex justify-around shadow-2xl pb-safe">
                         <button onClick={()=>setActiveTab('help')} className={activeTab==='help'?'text-indigo-600':'text-slate-400'}><i className="ph-fill ph-book-open text-3xl"></i></button>
                         <button onClick={()=>setActiveTab('dashboard')} className={activeTab==='dashboard'?'text-indigo-600':'text-slate-400'}><i className="ph-fill ph-chart-polar text-3xl"></i></button>
