@@ -54,7 +54,7 @@
 
         const generateItemId = () => Math.random().toString(36).substr(2, 9);
 
-        // 工業級 CSV 行解析器 (解決截圖中的欄位錯位問題)
+        // 工業級 CSV 行解析器 (核心：處理 Supabase 原始檔中的 JSON 雙引號與逗號)
         const parseCSVLine = (text) => {
             const result = [];
             let current = "";
@@ -63,7 +63,7 @@
                 const char = text[i];
                 if (char === '"') {
                     if (inQuotes && text[i + 1] === '"') {
-                        current += '"'; i++; // 處理重複引號 (Escaped Quotes)
+                        current += '"'; i++; // 處理 escaped quotes "" -> "
                     } else {
                         inQuotes = !inQuotes;
                     }
@@ -234,7 +234,7 @@
                 showToast("報表下載成功");
             };
 
-            // 修正版 CSV 復原引擎 (解決截圖問題)
+            // --- 智能 CSV 復原引擎 (支援報表與 Supabase 原始檔) ---
             const importCSV = (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
@@ -246,9 +246,32 @@
                         const lines = text.split(/\r?\n/).filter(line => line.trim() !== "");
                         if (lines.length < 2) throw new Error("CSV 檔案內容過少");
 
+                        const firstLineHeaders = parseCSVLine(lines[0]);
+                        
+                        // 識別模式 1: Supabase 原始匯出檔 (id, data, updated_at)
+                        if (firstLineHeaders.includes('id') && firstLineHeaders.includes('data')) {
+                            const dataIdx = firstLineHeaders.indexOf('data');
+                            const importedInvoices = [];
+                            for (let i = 1; i < lines.length; i++) {
+                                const cols = parseCSVLine(lines[i]);
+                                if (cols[dataIdx]) {
+                                    try {
+                                        const invoiceData = JSON.parse(cols[dataIdx]);
+                                        importedInvoices.push(invoiceData);
+                                    } catch (e) { console.error("JSON 解析錯誤", e); }
+                                }
+                            }
+                            if (importedInvoices.length > 0) {
+                                setInvoices(importedInvoices);
+                                showToast(`還原成功！已從 Supabase 原始檔導入 ${importedInvoices.length} 張發票`, "success");
+                                return;
+                            }
+                        }
+
+                        // 識別模式 2: App 報表匯出格式 (Grouping Logic)
                         const invoiceMap = new Map();
                         for (let i = 1; i < lines.length; i++) {
-                            const cols = parseCSVLine(lines[i]); // 使用引號安全解析器
+                            const cols = parseCSVLine(lines[i]);
                             if (cols.length < 10) continue;
 
                             const invNum = cols[4];
@@ -271,7 +294,6 @@
                             }
 
                             const inv = invoiceMap.get(invNum);
-                            // 如果 CSV 行中有品項資訊 (Index 10 開始)
                             if (cols[10] && cols[10] !== "") {
                                 inv.items.push({
                                     id: generateItemId() + i,
@@ -289,10 +311,10 @@
                             setInvoices(importedInvoices);
                             showToast(`還原成功！已正確導入 ${importedInvoices.length} 張發票資料`, "success");
                         } else {
-                            showToast("讀取失敗：CSV 內容不符合系統格式", "error");
+                            showToast("讀取失敗：CSV 內容不符合系統識別格式", "error");
                         }
                     } catch (err) {
-                        showToast("解析失敗，請確認檔案是否為本系統導出的 CSV", "error");
+                        showToast("解析失敗，請確認檔案格式", "error");
                     }
                 };
                 reader.readAsText(file);
@@ -323,7 +345,7 @@
                                 <div className="text-[10px] font-bold text-slate-500 uppercase mb-2 tracking-widest text-center">Cloud Node Sync</div>
                                 <div className="flex items-center justify-center gap-2">
                                     <div className={`w-2.5 h-2.5 rounded-full ${syncStatus === 'syncing' ? 'bg-amber-400 animate-pulse' : syncStatus === 'error' ? 'bg-red-500' : 'bg-emerald-500'}`}></div>
-                                    <span className="text-[10px] font-bold text-slate-300 uppercase">
+                                    <span className="text-[10px] font-bold text-slate-300 uppercase tracking-tighter">
                                         {syncStatus === 'syncing' ? 'Mirroring...' : syncStatus === 'error' ? 'Sync Error' : 'Database Secure'}
                                     </span>
                                 </div>
@@ -337,12 +359,12 @@
                         {activeTab === 'help' && (
                             <div className="max-w-4xl mx-auto space-y-12 animate-slide-in">
                                 <header className="bg-gradient-to-br from-indigo-900 via-indigo-800 to-slate-900 p-12 rounded-[3.5rem] text-white shadow-2xl text-center">
-                                    <h2 className="text-4xl font-black mb-4 tracking-tight">CSV 修復與還原系統</h2>
-                                    <p className="text-indigo-200 text-lg font-medium italic">「解決導出錯位問題，支援複雜品項規格的精確還原。」</p>
+                                    <h2 className="text-4xl font-black mb-4 tracking-tight tracking-widest">CSV 修復與智能還原</h2>
+                                    <p className="text-indigo-200 text-lg font-medium italic">「支援報表與 Supabase 原始檔，實現真正的數據互通。」</p>
                                 </header>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                                    <div className="bg-white p-8 rounded-[2rem] border shadow-sm"><h4 className="font-black text-indigo-700 mb-4 flex items-center gap-2"><i className="ph ph-bug"></i> 解決 NaN 與錯位</h4><p className="text-sm text-slate-500 leading-relaxed">針對 Supabase CSV 的引號包裹特性進行了適配，現在匯入時不會再將品項內容誤判為發票號碼。</p></div>
-                                    <div className="bg-white p-8 rounded-[2rem] border shadow-sm"><h4 className="font-black text-emerald-700 mb-4 flex items-center gap-2"><i className="ph ph-check-square"></i> 高相容性解析器</h4><p className="text-sm text-slate-500 leading-relaxed">內建 Quote-Aware 解析邏輯，即便規格內含有逗號或分行符號，也能確保數據行與行之間對齊無誤。</p></div>
+                                    <div className="bg-white p-8 rounded-[2rem] border shadow-sm"><h4 className="font-black text-indigo-700 mb-4 flex items-center gap-2"><i className="ph ph-database"></i> 支援 Supabase 原始檔</h4><p className="text-sm text-slate-500 leading-relaxed">現在您可以直接將 Supabase Table 匯出的 CSV 檔案上傳還原。系統會自動解碼 JSONB 數據欄位，無須手動轉換。</p></div>
+                                    <div className="bg-white p-8 rounded-[2rem] border shadow-sm"><h4 className="font-black text-emerald-700 mb-4 flex items-center gap-2"><i className="ph ph-check-square"></i> 報表格式相容</h4><p className="text-sm text-slate-500 leading-relaxed">同樣支援 App 導出的財務明細 CSV，系統會自動歸納發票與品項關聯，維持數據 100% 完整度。</p></div>
                                 </div>
                             </div>
                         )}
@@ -400,9 +422,9 @@
                         {activeTab === 'list' && (
                             <div className="space-y-6 animate-slide-in">
                                 <header className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
-                                    <div><h2 className="text-3xl font-black text-slate-800 tracking-tight italic">整合明細清單</h2></div>
+                                    <div><h2 className="text-3xl font-black text-slate-800 tracking-tight italic tracking-widest uppercase">整合明細清單</h2></div>
                                     <div className="flex flex-wrap gap-4 w-full md:w-auto">
-                                        <label className="bg-white border-2 border-dashed border-indigo-200 text-indigo-600 px-6 py-2.5 rounded-2xl font-black flex items-center gap-2 shadow-sm text-xs cursor-pointer hover:bg-indigo-50 transition-all shadow-indigo-100/50"><i className="ph ph-upload"></i> 從 CSV 還原<input type="file" accept=".csv" onChange={importCSV} className="hidden" /></label>
+                                        <label className="bg-white border-2 border-dashed border-indigo-200 text-indigo-600 px-6 py-2.5 rounded-2xl font-black flex items-center gap-2 shadow-sm text-xs cursor-pointer hover:bg-indigo-50 transition-all shadow-indigo-100/50"><i className="ph ph-upload"></i> 從 CSV 還原 (支援原始檔)<input type="file" accept=".csv" onChange={importCSV} className="hidden" /></label>
                                         <div className="bg-white border px-4 py-2 rounded-2xl flex items-center gap-2 shadow-sm text-xs font-bold border-slate-200"><i className="ph ph-calendar text-indigo-500"></i>
                                             <select value={filterPeriod} onChange={e=>setFilterPeriod(e.target.value)} className="outline-none bg-transparent">
                                                 <option value="ALL">全部月份期別</option>
@@ -422,7 +444,7 @@
                                 <div className="bg-white rounded-[2.5rem] border border-slate-200 overflow-hidden shadow-sm">
                                     <table className="w-full text-left">
                                         <thead className="bg-slate-50 text-[10px] font-black text-slate-400 tracking-widest border-b uppercase">
-                                            <tr><th className="p-6">發票號碼</th><th className="p-6 text-center">期別/統編</th><th className="p-6 text-center">狀態</th><th className="p-6 text-right font-black">總計金額</th><th className="p-6 text-center">操作</th></tr>
+                                            <tr><th className="p-6">發票號碼</th><th className="p-6 text-center font-black">期別/統編</th><th className="p-6 text-center font-black">狀態</th><th className="p-6 text-right font-black">總計金額</th><th className="p-6 text-center font-black">操作</th></tr>
                                         </thead>
                                         <tbody className="divide-y divide-slate-100">
                                             {invoices.filter(i=>{
@@ -433,7 +455,7 @@
                                                 <Fragment key={inv.id}>
                                                     <tr onClick={()=>setExpandedInvoiceId(expandedInvoiceId===inv.id?null:inv.id)} className="cursor-pointer hover:bg-slate-50 transition-all group">
                                                         <td className={`p-6 font-black font-mono text-lg ${inv.status==='void'?'line-through text-slate-300':'text-slate-800'}`}>{inv.invoiceNumber}</td>
-                                                        <td className="p-6 text-sm text-slate-500 text-center"><div className="font-bold text-slate-700">{getInvoicePeriod(inv.date)}</div><div className="text-[10px] font-bold text-slate-300 uppercase">{inv.taxId || '二聯/無統編'}</div></td>
+                                                        <td className="p-6 text-sm text-slate-500 text-center"><div className="font-bold text-slate-700">{getInvoicePeriod(inv.date)}</div><div className="text-[10px] font-bold text-slate-300 uppercase font-mono">{inv.taxId || '二聯/無統編'}</div></td>
                                                         <td className="p-6 text-center">{inv.status==='void'?<span className="bg-red-50 text-red-600 px-3 py-1 rounded-full text-[10px] font-black border border-red-100">作廢</span>:<span className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full text-[10px] font-black border border-emerald-100">正常</span>}</td>
                                                         <td className={`p-6 text-right font-black font-mono text-xl ${inv.status==='void'?'text-slate-300':'text-indigo-700'}`}>${(inv.total||0).toLocaleString()}</td>
                                                         <td className="p-6 text-center"><button onClick={(e)=>{e.stopPropagation(); setInvoices(invoices.filter(i=>i.id!==inv.id));}} className="text-slate-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"><i className="ph-fill ph-trash-simple text-2xl"></i></button></td>
