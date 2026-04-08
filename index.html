@@ -11,12 +11,12 @@
     <!-- 引入 Phosphor 企業級圖示庫 -->
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
     
-    <!-- 引入 React, ReactDOM 與 Chart.js (穩定版視覺化引擎) -->
+    <!-- 引入 React, ReactDOM 與 Chart.js -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
-    <!-- 引入 Firebase Compat SDK (解決 require is not defined 問題) -->
+    <!-- 引入 Firebase Compat SDK -->
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
@@ -43,7 +43,7 @@
         const COLORS = ['#4f46e5', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
 
         const INITIAL_INVOICES = [
-            { id: '1', invoiceNumber: 'AB-12345678', date: '2026-04-01', invoiceType: '三聯式', taxId: '23456789', netAmount: 1000, tax: 50, total: 1050, items: [{id: 1, name: '高階機械鍵盤', quantity: 1, unitPrice: 1000, amount: 1000}], status: 'verified' }
+            { id: '1', invoiceNumber: 'AB-12345678', date: '2026-04-01', invoiceType: '三聯式', taxId: '23456789', netAmount: 1000, tax: 50, total: 1050, items: [{id: 1, name: '高階機械鍵盤', quantity: 1, unitPrice: 1000, amount: 1000}] }
         ];
 
         const getInvoicePeriod = (dateString) => {
@@ -60,7 +60,6 @@
         const generateItemId = () => Math.random().toString(36).substr(2, 9);
 
         function App() {
-            // --- 狀態管理 ---
             const [invoices, setInvoices] = useState(() => {
                 const saved = localStorage.getItem('nextgen_invoices');
                 return saved ? JSON.parse(saved) : INITIAL_INVOICES;
@@ -70,7 +69,6 @@
             
             const [selectedPeriod, setSelectedPeriod] = useState('ALL');
             const [selectedType, setSelectedType] = useState('ALL'); 
-            
             const [user, setUser] = useState(null);
             const [isCloudSync, setIsCloudSync] = useState(false);
             const dbRef = useRef(null);
@@ -83,58 +81,37 @@
             const [isScanning, setIsScanning] = useState(false);
             const [errors, setErrors] = useState({});
             const invoiceInputRef = useRef(null);
-
             const barChartRef = useRef(null);
             const pieChartRef = useRef(null);
             const barChartInstance = useRef(null);
             const pieChartInstance = useRef(null);
 
-            // --- Firebase 初始化 (修復後的 Compat 模式) ---
+            // --- Firebase 初始化 ---
             useEffect(() => {
                 const setupFirebase = async () => {
                     try {
                         let config;
                         const isCanvasEnv = typeof __firebase_config !== 'undefined';
-
-                        if (isCanvasEnv) {
-                            config = JSON.parse(__firebase_config);
-                        } else {
-                            // 👇 Verna, 請在此處替換您的個人 Firebase Config 👇
+                        if (isCanvasEnv) { config = JSON.parse(__firebase_config); } else {
                             config = {
-                                apiKey: "YOUR_API_KEY",
-                                authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-                                projectId: "YOUR_PROJECT_ID",
-                                storageBucket: "YOUR_PROJECT_ID.appspot.com",
-                                messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-                                appId: "YOUR_APP_ID"
+                                apiKey: "您的_API_KEY",
+                                authDomain: "您的專案ID.firebaseapp.com",
+                                projectId: "您的專案ID",
+                                storageBucket: "您的專案ID.appspot.com",
+                                messagingSenderId: "您的發送者ID",
+                                appId: "您的應用程式ID"
                             };
                         }
-
-                        if (!isCanvasEnv && config.apiKey === "YOUR_API_KEY") return; 
-
-                        // 初始化 Firebase (Compat 版)
-                        if (!firebase.apps.length) {
-                            firebase.initializeApp(config);
-                        }
-                        
+                        if (!isCanvasEnv && config.apiKey === "您的_API_KEY") return; 
+                        if (!firebase.apps.length) { firebase.initializeApp(config); }
                         const auth = firebase.auth();
                         dbRef.current = firebase.firestore();
-
-                        // 登入處理
                         if (isCanvasEnv && typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                             await auth.signInWithCustomToken(__initial_auth_token);
-                        } else {
-                            await auth.signInAnonymously();
-                        }
-
-                        const unsubscribe = auth.onAuthStateChanged((currentUser) => {
-                            setUser(currentUser);
-                        });
+                        } else { await auth.signInAnonymously(); }
+                        const unsubscribe = auth.onAuthStateChanged((currentUser) => { setUser(currentUser); });
                         return unsubscribe;
-
-                    } catch (error) {
-                        console.error("Firebase 啟動失敗:", error);
-                    }
+                    } catch (error) { console.error("Firebase 啟動失敗:", error); }
                 };
                 setupFirebase();
             }, []);
@@ -142,10 +119,8 @@
             // --- Firestore 即時監聽 ---
             useEffect(() => {
                 if (!user || !dbRef.current) return;
-
                 const appIdStr = typeof __app_id !== 'undefined' ? __app_id : 'github-pages-invoice-app';
                 const colRef = dbRef.current.collection('artifacts').doc(appIdStr).collection('users').doc(user.uid).collection('invoices');
-
                 const unsubscribe = colRef.onSnapshot((snapshot) => {
                     const loadedInvoices = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                     loadedInvoices.sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -155,7 +130,6 @@
                     console.error("Firestore 同步出錯:", error);
                     setIsCloudSync(false);
                 });
-
                 return unsubscribe;
             }, [user]);
 
@@ -247,27 +221,30 @@
                 if (filteredInvoices.length === 0) { showToast('目前條件下沒有資料可以匯出喔！', 'info'); return; }
                 const headers = ['期別', '發票類型', '稅別', '發票號碼', '開立日期', '買受人統編', '品項名稱', '單價', '數量', '品項小計', '整筆銷售額(未稅)', '整筆營業稅', '整筆總計(含稅)'];
                 const csvRows = [headers.join(',')];
+                
                 filteredInvoices.forEach(inv => {
                     const taxTypeLabel = inv.tax === 0 ? '免稅' : '應稅';
                     const baseInfo = `${getInvoicePeriod(inv.date)},${inv.invoiceType},${taxTypeLabel},${inv.invoiceNumber},${inv.date},${inv.taxId || ''}`;
                     const totalInfo = `${inv.netAmount},${inv.tax},${inv.total}`;
+                    
                     if (inv.items && inv.items.length > 0) {
                         inv.items.forEach(item => {
                             const safeName = `"${(item.name || '').replace(/"/g, '""')}"`;
                             csvRows.push(`${baseInfo},${safeName},${item.unitPrice || 0},${item.quantity || 0},${item.amount || 0},${totalInfo}`);
                         });
-                    } else { csvRows.push(`${baseInfo},無明細,0,0,0,${totalInfo}`); }
+                    } else {
+                        csvRows.push(`${baseInfo},無明細,0,0,0,${totalInfo}`);
+                    }
                 });
                 
                 const typeLabel = selectedType === 'ALL' ? '全部類型' : selectedType;
                 const periodLabel = selectedPeriod === 'ALL' ? '全期別' : selectedPeriod;
-                
                 const blob = new Blob(['\uFEFF' + csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
                 const link = document.createElement('a'); 
                 link.setAttribute('href', URL.createObjectURL(blob));
-                link.setAttribute('download', `發票報表_${periodLabel}_${typeLabel}.csv`);
+                link.setAttribute('download', `發票整合報表_${periodLabel}_${typeLabel}.csv`);
                 link.style.visibility = 'hidden'; document.body.appendChild(link); link.click(); document.body.removeChild(link);
-                showToast(`已成功導出 ${typeLabel} 報表！`, 'success');
+                showToast(`已成功導出 ${typeLabel} 整合報表！`, 'success');
             };
 
             const showToast = (message, type = 'success') => { setToast({ message, type }); setTimeout(() => setToast(null), 3000); };
@@ -311,13 +288,11 @@
             const handleInputChange = (e) => {
                 const { name, value } = e.target;
                 let newFormData = { ...formData, [name]: value };
-
                 if (name === 'invoiceType') {
                     newFormData.taxId = ''; 
                     if (newFormData.items.length > 0) { newFormData = { ...newFormData, ...recalculateTotalsFromItems(newFormData.items, value, newFormData.taxRate) }; } 
                     else { newFormData.netAmount = ''; newFormData.tax = ''; newFormData.total = ''; }
                 }
-
                 if (newFormData.items.length === 0) {
                     if (name === 'netAmount' && newFormData.invoiceType === '三聯式' && value && !isNaN(value)) {
                         const net = parseInt(value, 10); newFormData.tax = Math.round(net * formData.taxRate); newFormData.total = net + newFormData.tax;
@@ -326,14 +301,12 @@
                         const tot = parseInt(value, 10); newFormData.netAmount = Math.round(tot / (1 + formData.taxRate)); newFormData.tax = tot - newFormData.netAmount;
                     }
                 }
-
                 if (name === 'invoiceNumber') {
                     let formatted = value.toUpperCase().replace(/[^A-Z0-9]/g, '');
                     if (formatted.length > 2) formatted = formatted.substring(0, 2) + '-' + formatted.substring(2, 10);
                     newFormData[name] = formatted;
                 }
                 if (name === 'taxId') { newFormData[name] = value.replace(/[^\d]/g, '').substring(0, 8); }
-
                 setFormData(newFormData);
                 if (errors[name]) setErrors({ ...errors, [name]: null });
             };
@@ -363,22 +336,51 @@
                 e.preventDefault();
                 if (validateForm()) {
                     const cleanItems = formData.items.filter(item => item.name.trim() !== '');
-                    const newInvoice = {
-                        ...formData, items: cleanItems, id: Date.now().toString(),
-                        netAmount: parseInt(formData.netAmount, 10) || 0, tax: parseInt(formData.tax, 10) || 0, total: parseInt(formData.total, 10) || 0,
-                    };
+                    const invoiceNum = formData.invoiceNumber;
                     
-                    const period = getInvoicePeriod(formData.date);
+                    // --- 智能合併邏輯 ---
+                    // 尋找清單中是否已有相同發票號碼
+                    const existingInv = invoices.find(inv => inv.invoiceNumber === invoiceNum);
+                    let finalInvoice;
+
+                    if (existingInv) {
+                        // 合併品項明細
+                        const mergedItems = [...existingInv.items, ...cleanItems];
+                        const calc = recalculateTotalsFromItems(mergedItems, existingInv.invoiceType, existingInv.taxRate);
+                        finalInvoice = {
+                            ...existingInv,
+                            items: mergedItems,
+                            netAmount: calc.netAmount,
+                            tax: calc.tax,
+                            total: calc.total,
+                            date: formData.date // 更新為最新提交的日期
+                        };
+                    } else {
+                        // 新發票
+                        finalInvoice = {
+                            ...formData,
+                            items: cleanItems,
+                            id: Date.now().toString(),
+                            netAmount: parseInt(formData.netAmount, 10) || 0,
+                            tax: parseInt(formData.tax, 10) || 0,
+                            total: parseInt(formData.total, 10) || 0,
+                        };
+                    }
+                    
+                    const period = getInvoicePeriod(finalInvoice.date);
                     if (isCloudSync && dbRef.current && user) {
                         const appIdStr = typeof __app_id !== 'undefined' ? __app_id : 'github-pages-invoice-app';
-                        const docRef = dbRef.current.collection('artifacts').doc(appIdStr).collection('users').doc(user.uid).collection('invoices').doc(newInvoice.id);
-                        await docRef.set(newInvoice);
-                        showToast(`已雲端同步 (${period})`, 'success');
+                        const docRef = dbRef.current.collection('artifacts').doc(appIdStr).collection('users').doc(user.uid).collection('invoices').doc(finalInvoice.id);
+                        await docRef.set(finalInvoice);
+                        showToast(existingInv ? `已整合並更新發票 ${invoiceNum}` : `已錄入新發票 (${period})`, 'success');
                     } else {
-                        const updatedInvoices = [newInvoice, ...invoices].sort((a, b) => new Date(b.date) - new Date(a.date));
-                        setInvoices(updatedInvoices);
-                        showToast(`已本機歸檔 (${period})`, 'success');
+                        const newInvoiceList = existingInv 
+                            ? invoices.map(inv => inv.id === existingInv.id ? finalInvoice : inv)
+                            : [finalInvoice, ...invoices];
+                        setInvoices(newInvoiceList.sort((a, b) => new Date(b.date) - new Date(a.date)));
+                        showToast(existingInv ? `已整合至本機發票 ${invoiceNum}` : `已錄入新發票至本機`, 'success');
                     }
+                    
                     setFormData({ ...formData, invoiceNumber: '', taxId: '', items: [], netAmount: '', tax: '', total: '' });
                 } else { showToast('請檢查輸入完整性。', 'error'); }
             };
@@ -388,7 +390,7 @@
                     const appIdStr = typeof __app_id !== 'undefined' ? __app_id : 'github-pages-invoice-app';
                     const docRef = dbRef.current.collection('artifacts').doc(appIdStr).collection('users').doc(user.uid).collection('invoices').doc(id);
                     await docRef.delete();
-                    showToast('雲端發票已作廢。', 'success');
+                    showToast('發票已作廢。', 'success');
                 } else {
                     setInvoices(invoices.filter(inv => inv.id !== id));
                     showToast('本機發票已作廢。', 'success');
@@ -398,22 +400,22 @@
             const simulateAIScan = () => {
                 setIsScanning(true); showToast('AI 解析中...', 'info');
                 setTimeout(() => {
-                    const isTri = Math.random() > 0.5; const isTaxFree = Math.random() > 0.8;
+                    const isTri = Math.random() > 0.5;
                     const simulatedItems = [{ id: generateItemId(), name: isTri ? '雲端授權費' : '辦公雜資', quantity: 1, unitPrice: 1500, amount: 1500 }];
-                    const calcRes = recalculateTotalsFromItems(simulatedItems, isTri ? '三聯式' : '二聯式', isTaxFree ? 0 : 0.05);
+                    const calcRes = recalculateTotalsFromItems(simulatedItems, isTri ? '三聯式' : '二聯式', 0.05);
                     setFormData({
-                        invoiceType: isTri ? '三聯式' : '二聯式', taxRate: isTaxFree ? 0 : 0.05,
-                        invoiceNumber: `XY-${Math.floor(10000000 + Math.random() * 90000000)}`, date: new Date().toISOString().split('T')[0],
+                        invoiceType: isTri ? '三聯式' : '二聯式', taxRate: 0.05,
+                        invoiceNumber: `XY-88889999`, // 故意模擬重複號碼測試整合
+                        date: new Date().toISOString().split('T')[0],
                         taxId: isTri ? '87654321' : '', items: simulatedItems, ...calcRes
                     });
-                    setIsScanning(false); showToast('AI 辨識成功！', 'success');
+                    setIsScanning(false); showToast('AI 辨識成功！發現相同號碼將會自動整合。', 'success');
                 }, 1500);
             };
 
             const totalAmount = filteredInvoices.reduce((sum, inv) => sum + inv.total, 0);
             const totalTax = filteredInvoices.reduce((sum, inv) => sum + inv.tax, 0);
 
-            // --- UI 子元件：篩選器 ---
             const PeriodSelector = () => (
                 <div className="flex items-center gap-2 bg-white border border-slate-200 px-3 py-2 rounded-xl shadow-sm flex-shrink-0 w-full md:w-auto">
                     <i className="ph ph-calendar-blank text-slate-400 text-lg"></i>
@@ -435,72 +437,52 @@
                 </div>
             );
 
-            const SystemStatusCard = () => (
-                <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-5 md:p-6 h-full flex flex-col justify-between">
-                    <div>
-                        <h4 className="text-emerald-800 font-bold mb-1 flex items-center gap-2"><i className="ph-fill ph-database text-lg"></i> 系統狀態</h4>
-                        <p className="text-emerald-700 text-sm">庫存發票：<span className="font-bold text-lg">{invoices.length}</span> 張</p>
-                    </div>
-                    <div className="mt-4 inline-flex items-center gap-2 px-3 py-1.5 bg-white rounded-full text-[10px] font-bold shadow-sm border border-emerald-100">
-                        {isCloudSync ? <><i className="ph-fill ph-cloud-check text-blue-500"></i> <span className="text-blue-700">Firebase 即時同步中</span></> : <><i className="ph-fill ph-hard-drives text-slate-400"></i> <span className="text-slate-500">本機儲存模式</span></>}
-                    </div>
-                </div>
-            );
-
             return (
                 <div className="flex flex-col md:flex-row h-screen bg-slate-50 font-sans text-slate-800 overflow-hidden">
-                    
-                    {/* 桌機版側邊欄 */}
                     <aside className="hidden md:flex w-64 bg-slate-900 text-slate-300 flex-col z-10 shadow-xl flex-shrink-0">
                         <div className="p-6">
-                            <h1 className="text-xl font-bold text-white flex items-center gap-2"><i className="ph-fill ph-lightning text-emerald-400"></i> NextGen 發票</h1>
-                            <p className="text-xs mt-2 text-slate-500">2026 企業管理方案</p>
+                            <h1 className="text-xl font-bold text-white flex items-center gap-2"><i className="ph-fill ph-lightning text-emerald-400"></i> NextGen 財務</h1>
+                            <p className="text-xs mt-2 text-slate-500">2026 智能會計</p>
                         </div>
                         <nav className="flex-1 px-4 space-y-2 mt-4">
                             <button onClick={() => setActiveTab('entry')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'entry' ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800 hover:text-white'}`}>
-                                <i className="ph ph-plus text-xl"></i> 發票錄入
+                                <i className="ph ph-plus text-xl"></i> 智能錄入
                             </button>
                             <button onClick={() => setActiveTab('list')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'list' ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800 hover:text-white'}`}>
-                                <i className="ph ph-list-numbers text-xl"></i> 報表與導出
+                                <i className="ph ph-list-numbers text-xl"></i> 整合清單
                             </button>
                             <button onClick={() => setActiveTab('dashboard')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'dashboard' ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800 hover:text-white'}`}>
-                                <i className="ph ph-chart-polar text-xl"></i> 統計與分析
+                                <i className="ph ph-chart-polar text-xl"></i> 數據洞察
                             </button>
                         </nav>
                     </aside>
-
-                    {/* 手機導航 */}
                     <nav className="md:hidden fixed bottom-0 w-full bg-white border-t border-slate-200 flex justify-around items-center p-2 z-50 pb-safe shadow-lg">
                         <button onClick={() => setActiveTab('entry')} className={`flex flex-col items-center p-2 w-full ${activeTab === 'entry' ? 'text-indigo-600' : 'text-slate-400'}`}>
                             <i className="ph-fill ph-plus-circle text-2xl"></i><span className="text-[10px]">錄入</span>
                         </button>
                         <button onClick={() => setActiveTab('list')} className={`flex flex-col items-center p-2 w-full ${activeTab === 'list' ? 'text-indigo-600' : 'text-slate-400'}`}>
-                            <i className="ph-fill ph-list-numbers text-2xl"></i><span className="text-[10px]">報表</span>
+                            <i className="ph-fill ph-list-numbers text-2xl"></i><span className="text-[10px]">清單</span>
                         </button>
                         <button onClick={() => setActiveTab('dashboard')} className={`flex flex-col items-center p-2 w-full ${activeTab === 'dashboard' ? 'text-indigo-600' : 'text-slate-400'}`}>
                             <i className="ph-fill ph-chart-polar text-2xl"></i><span className="text-[10px]">分析</span>
                         </button>
                     </nav>
-
-                    {/* 主內容區 */}
                     <main className="flex-1 overflow-y-auto relative pb-24 md:pb-0">
                         {toast && (
-                            <div className="absolute top-4 right-4 px-4 py-3 rounded-xl shadow-lg flex items-center gap-3 bg-emerald-100 text-emerald-800 border border-emerald-200 z-[60] animate-slide-in">
-                                <i className="ph-fill ph-check-circle text-emerald-500 text-xl"></i><span>{toast.message}</span>
+                            <div className="absolute top-4 right-4 px-4 py-3 rounded-xl shadow-lg flex items-center gap-3 bg-indigo-100 text-indigo-800 border border-indigo-200 z-[60] animate-slide-in">
+                                <i className="ph-fill ph-info text-indigo-500 text-xl"></i><span>{toast.message}</span>
                             </div>
                         )}
-
                         <div className="p-4 md:p-8 max-w-6xl mx-auto">
                             <header className="mb-6 md:mb-8 flex flex-col md:flex-row md:justify-between items-start md:items-end gap-4">
                                 <div>
                                     <h2 className="text-3xl font-bold text-slate-800">
-                                        {activeTab === 'entry' && '新增發票數據'}
-                                        {activeTab === 'list' && '報表管理中心'}
+                                        {activeTab === 'entry' && '新增與整合數據'}
+                                        {activeTab === 'list' && '發票整合明細'}
                                         {activeTab === 'dashboard' && '財務戰情室'}
                                     </h2>
-                                    <p className="text-slate-500 mt-1">即時同步 Firebase 雲端，確保數據永不遺失。</p>
+                                    <p className="text-slate-500 mt-1">系統將根據發票號碼自動整合所有商品明細。</p>
                                 </div>
-                                
                                 <div className="flex flex-col md:flex-row gap-3 w-full md:w-auto items-stretch md:items-center">
                                     {(activeTab === 'list' || activeTab === 'dashboard') && (
                                         <>
@@ -510,25 +492,22 @@
                                     )}
                                     {activeTab === 'list' && (
                                         <button onClick={exportToCSV} className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl shadow-md transition-all active:scale-95 text-sm font-bold">
-                                            <i className="ph ph-download text-lg"></i> 導出 CSV
+                                            <i className="ph ph-download text-lg"></i> 導出整合報表
                                         </button>
                                     )}
                                 </div>
                             </header>
-
                             {activeTab === 'entry' && (
                                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                                     <div className="lg:col-span-2 bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                                         <form onSubmit={handleSubmit} className="space-y-6">
-                                            {/* 發票類型切換 */}
                                             <div className="flex p-1 bg-slate-100 rounded-xl max-w-sm">
                                                 <button type="button" onClick={() => handleInputChange({ target: { name: 'invoiceType', value: '三聯式' }})} className={`flex-1 py-2 text-sm font-bold rounded-lg ${formData.invoiceType === '三聯式' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500'}`}>三聯 (B2B)</button>
                                                 <button type="button" onClick={() => handleInputChange({ target: { name: 'invoiceType', value: '二聯式' }})} className={`flex-1 py-2 text-sm font-bold rounded-lg ${formData.invoiceType === '二聯式' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500'}`}>二聯 (B2C)</button>
                                             </div>
-
                                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                                 <div className="space-y-2">
-                                                    <label className="text-sm font-semibold text-slate-700">發票號碼</label>
+                                                    <label className="text-sm font-semibold text-slate-700">發票號碼 <span className="text-[10px] text-indigo-500 font-normal">(重複號碼將自動整合)</span></label>
                                                     <input ref={invoiceInputRef} type="text" name="invoiceNumber" value={formData.invoiceNumber} onChange={handleInputChange} placeholder="兩碼英文-八碼數字" className={`w-full px-4 py-2.5 rounded-xl border ${errors.invoiceNumber ? 'border-red-400' : 'border-slate-300'} focus:ring-2 focus:ring-indigo-500 outline-none uppercase font-mono`} />
                                                 </div>
                                                 <div className="space-y-2">
@@ -536,18 +515,15 @@
                                                     <input type="date" name="date" value={formData.date} onChange={handleInputChange} className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-indigo-500 outline-none" />
                                                 </div>
                                             </div>
-
                                             {formData.invoiceType === '三聯式' && (
                                                 <div className="space-y-2">
                                                     <label className="text-sm font-semibold text-slate-700">買受人統編</label>
                                                     <input type="text" name="taxId" value={formData.taxId} onChange={handleInputChange} placeholder="8 碼數字" maxLength={8} className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-indigo-500 outline-none" />
                                                 </div>
                                             )}
-
-                                            {/* 品項區塊 */}
                                             <div className="pt-4 border-t border-slate-100">
                                                 <div className="flex justify-between items-center mb-4">
-                                                    <h3 className="font-bold flex items-center gap-2"><i className="ph ph-shopping-cart text-indigo-500"></i> 發票明細</h3>
+                                                    <h3 className="font-bold flex items-center gap-2 text-indigo-900"><i className="ph ph-shopping-cart"></i> 本次新增明細</h3>
                                                     <button type="button" onClick={addItem} className="text-sm font-bold text-indigo-600 hover:bg-indigo-50 px-3 py-1.5 rounded-lg">+ 新增品項</button>
                                                 </div>
                                                 <div className="space-y-3">
@@ -564,12 +540,10 @@
                                                     ))}
                                                 </div>
                                             </div>
-
-                                            {/* 金額計算區塊 */}
                                             <div className="bg-indigo-50/50 p-6 rounded-2xl border border-indigo-100 grid grid-cols-1 md:grid-cols-3 gap-6">
                                                 <div className="space-y-1">
                                                     <label className="text-xs font-bold text-indigo-600">銷售額 (未稅)</label>
-                                                    <input type="number" name="netAmount" value={formData.netAmount} onChange={handleInputChange} readOnly={isAmountLockedByItems} className="w-full bg-transparent border-b border-indigo-200 text-xl font-mono text-indigo-900 outline-none" />
+                                                    <input type="number" name="netAmount" value={formData.netAmount} onChange={handleInputChange} readOnly={formData.items.length > 0} className="w-full bg-transparent border-b border-indigo-200 text-xl font-mono text-indigo-900 outline-none" />
                                                 </div>
                                                 <div className="space-y-1">
                                                     <label className="text-xs font-bold text-indigo-600">營業稅</label>
@@ -577,39 +551,35 @@
                                                 </div>
                                                 <div className="space-y-1">
                                                     <label className="text-xs font-bold text-indigo-600">總計 (含稅)</label>
-                                                    <input type="number" name="total" value={formData.total} onChange={handleInputChange} readOnly={isAmountLockedByItems} className="w-full bg-transparent border-b border-indigo-200 text-xl font-mono text-indigo-900 font-bold outline-none" />
+                                                    <input type="number" name="total" value={formData.total} onChange={handleInputChange} readOnly={formData.items.length > 0} className="w-full bg-transparent border-b border-indigo-200 text-xl font-mono text-indigo-900 font-bold outline-none" />
                                                 </div>
                                             </div>
-
-                                            <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-2xl shadow-lg transition-all active:scale-95 text-lg">儲存並同步至雲端</button>
+                                            <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-2xl shadow-lg transition-all active:scale-95 text-lg">整合並存檔</button>
                                         </form>
                                     </div>
-
                                     <div className="space-y-6">
-                                        <div className="bg-slate-900 rounded-2xl p-6 text-white relative overflow-hidden h-48 flex flex-col justify-center">
-                                            <i className="ph ph-scan absolute -right-4 -bottom-4 text-8xl opacity-10"></i>
-                                            <h3 className="text-lg font-bold mb-2 flex items-center gap-2"><i className="ph ph-sparkle text-blue-400"></i> AI 智能掃描</h3>
-                                            <p className="text-slate-400 text-xs mb-4">即將支援：透過手機相機自動解析二聯與三聯發票明細。</p>
-                                            <button onClick={simulateAIScan} disabled={isScanning} className="w-full bg-blue-600 py-3 rounded-xl font-bold active:scale-95 transition-all">模擬 AI 解析</button>
+                                        <div className="bg-slate-900 rounded-2xl p-6 text-white relative overflow-hidden flex flex-col justify-center">
+                                            <i className="ph ph-intersect absolute -right-4 -bottom-4 text-8xl opacity-10"></i>
+                                            <h3 className="text-lg font-bold mb-2 flex items-center gap-2"><i className="ph ph-magic-wand text-blue-400"></i> 明細整合邏輯</h3>
+                                            <p className="text-slate-400 text-xs mb-4">系統現在支援偵測相同號碼。如果您錄入了一筆已存在的發票，系統會聰明地將新品項附加進去，而非建立重複記錄。</p>
+                                            <button onClick={simulateAIScan} disabled={isScanning} className="w-full bg-blue-600 py-3 rounded-xl font-bold active:scale-95 transition-all text-sm">模擬整合測試 (XY-88889999)</button>
                                         </div>
-                                        <SystemStatusCard />
                                     </div>
                                 </div>
                             )}
-
                             {activeTab === 'list' && (
                                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
                                     <div className="overflow-x-auto">
                                         <table className="w-full text-left min-w-[1000px]">
                                             <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-bold border-b">
                                                 <tr>
-                                                    <th className="p-4">期別</th>
+                                                    <th className="p-4">整合期別</th>
                                                     <th className="p-4">發票號碼</th>
-                                                    <th className="p-4">日期</th>
+                                                    <th className="p-4">明細數</th>
                                                     <th className="p-4">類型</th>
-                                                    <th className="p-4 text-right">銷售額</th>
-                                                    <th className="p-4 text-right">稅額</th>
-                                                    <th className="p-4 text-right font-bold">總計</th>
+                                                    <th className="p-4 text-right">總銷售額</th>
+                                                    <th className="p-4 text-right">總稅額</th>
+                                                    <th className="p-4 text-right font-bold">總計 (含稅)</th>
                                                     <th className="p-4 text-center">操作</th>
                                                 </tr>
                                             </thead>
@@ -617,8 +587,8 @@
                                                 {filteredInvoices.map((inv) => (
                                                     <tr key={inv.id} className="hover:bg-slate-50 transition-colors">
                                                         <td className="p-4 text-sm font-medium text-slate-400">{getInvoicePeriod(inv.date)}</td>
-                                                        <td className="p-4 font-bold font-mono">{inv.invoiceNumber}</td>
-                                                        <td className="p-4 text-sm">{inv.date}</td>
+                                                        <td className="p-4 font-bold font-mono text-slate-800">{inv.invoiceNumber}</td>
+                                                        <td className="p-4 text-sm text-indigo-600 font-bold">{inv.items ? inv.items.length : 0} 項品項</td>
                                                         <td className="p-4">
                                                             <span className={`px-2 py-1 rounded-md text-[10px] font-bold ${inv.invoiceType === '三聯式' ? 'bg-indigo-100 text-indigo-700' : 'bg-amber-100 text-amber-700'}`}>{inv.invoiceType}</span>
                                                         </td>
@@ -626,43 +596,41 @@
                                                         <td className="p-4 text-right font-mono text-sm">${inv.tax.toLocaleString()}</td>
                                                         <td className="p-4 text-right font-bold font-mono text-indigo-700">${inv.total.toLocaleString()}</td>
                                                         <td className="p-4 text-center">
-                                                            <button onClick={() => handleDelete(inv.id)} className="text-slate-300 hover:text-red-500 p-2"><i className="ph ph-trash-simple text-xl"></i></button>
+                                                            <button onClick={() => handleDelete(inv.id)} className="text-slate-300 hover:text-red-500 p-2 transition-colors"><i className="ph ph-trash-simple text-xl"></i></button>
                                                         </td>
                                                     </tr>
                                                 ))}
                                                 {filteredInvoices.length === 0 && (
-                                                    <tr><td colSpan="8" className="p-20 text-center text-slate-400">目前條件下無任何發票數據</td></tr>
+                                                    <tr><td colSpan="8" className="p-20 text-center text-slate-400">目前條件下無任何整合數據</td></tr>
                                                 )}
                                             </tbody>
                                         </table>
                                     </div>
                                 </div>
                             )}
-
                             {activeTab === 'dashboard' && (
                                 <div className="space-y-6">
                                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                                         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-                                            <div className="text-slate-400 text-xs font-bold mb-1 uppercase">篩選發票數</div>
+                                            <div className="text-slate-400 text-xs font-bold mb-1 uppercase">整合發票總數</div>
                                             <div className="text-4xl font-black text-slate-800">{filteredInvoices.length} <span className="text-sm font-normal text-slate-400">張</span></div>
                                         </div>
                                         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-                                            <div className="text-slate-400 text-xs font-bold mb-1 uppercase">本期稅額 (5%)</div>
-                                            <div className="text-4xl font-black text-slate-800 font-mono">${totalTax.toLocaleString()}</div>
+                                            <div className="text-slate-400 text-xs font-bold mb-1 uppercase">累計品項總數</div>
+                                            <div className="text-4xl font-black text-indigo-600">{filteredInvoices.reduce((acc, inv) => acc + (inv.items ? inv.items.length : 0), 0)} <span className="text-sm font-normal text-slate-400">筆</span></div>
                                         </div>
                                         <div className="bg-indigo-600 p-6 rounded-2xl shadow-lg text-white">
                                             <div className="text-indigo-200 text-xs font-bold mb-1 uppercase">本期應付/含稅總額</div>
                                             <div className="text-4xl font-black font-mono">${totalAmount.toLocaleString()}</div>
                                         </div>
                                     </div>
-
                                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                                         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 h-80">
-                                            <h4 className="font-bold text-slate-700 mb-6 flex items-center gap-2"><i className="ph-fill ph-chart-bar text-indigo-500"></i> 品項營收排行 (Top 5)</h4>
+                                            <h4 className="font-bold text-slate-700 mb-6 flex items-center gap-2"><i className="ph-fill ph-chart-bar text-indigo-500"></i> 品項營收排行 (已整合)</h4>
                                             <div className="h-56 w-full relative"><canvas ref={barChartRef}></canvas></div>
                                         </div>
                                         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 h-80">
-                                            <h4 className="font-bold text-slate-700 mb-6 flex items-center gap-2"><i className="ph-fill ph-chart-donut text-emerald-500"></i> 應稅/免稅分佈比例</h4>
+                                            <h4 className="font-bold text-slate-700 mb-6 flex items-center gap-2"><i className="ph-fill ph-chart-donut text-emerald-500"></i> 整合稅額分佈</h4>
                                             <div className="h-56 w-full relative"><canvas ref={pieChartRef}></canvas></div>
                                         </div>
                                     </div>
@@ -673,7 +641,6 @@
                 </div>
             );
         }
-
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
     </script>
