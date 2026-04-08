@@ -330,10 +330,6 @@
                                                     <button type="button" onClick={() => setFormData({...formData, invoiceType: '二聯式'})} className={`px-8 py-2 rounded-xl text-xs font-bold transition-all ${formData.invoiceType === '二聯式' ? 'bg-white shadow-md text-indigo-700' : 'text-slate-400'}`}>二聯 (B2C)</button>
                                                 </div>
                                                 <div className="flex items-center gap-6">
-                                                    <div className="flex p-1 bg-slate-200 rounded-xl">
-                                                        <button type="button" onClick={() => handleInputChange({target: {name: 'taxType', value: 'taxable'}})} className={`px-4 py-1.5 rounded-lg text-[10px] font-bold transition-all ${formData.taxType === 'taxable' ? 'bg-indigo-600 text-white' : 'text-slate-500'}`}>應稅</button>
-                                                        <button type="button" onClick={() => handleInputChange({target: {name: 'taxType', value: 'exempt'}})} className={`px-4 py-1.5 rounded-lg text-[10px] font-bold transition-all ${formData.taxType === 'exempt' ? 'bg-indigo-600 text-white' : 'text-slate-500'}`}>免稅</button>
-                                                    </div>
                                                     <label className="flex items-center gap-2 cursor-pointer bg-red-50 px-4 py-1.5 rounded-xl border border-red-100">
                                                         <input type="checkbox" checked={formData.status === 'void'} onChange={e => setFormData({...formData, status: e.target.checked ? 'void' : 'active'})} className="accent-red-500" />
                                                         <span className="text-[10px] font-bold text-red-600">作廢標記</span>
@@ -380,14 +376,32 @@
                                                 </div>
                                             </div>
 
-                                            <div className={`p-8 rounded-[2.5rem] text-white flex flex-col md:flex-row justify-between items-center shadow-2xl transition-all ${formData.status === 'void' ? 'bg-slate-700' : 'bg-indigo-900'}`}>
-                                                <div className="flex gap-12 w-full md:w-auto">
-                                                    <div><div className="text-[10px] uppercase font-bold text-indigo-300">銷售額 (未稅)</div><div className="text-2xl font-black font-mono mt-1">${(formData.netAmount || 0).toLocaleString()}</div></div>
-                                                    <div className="border-l border-indigo-800 pl-12"><div className="text-[10px] uppercase font-bold text-indigo-300">營業稅 ({formData.taxType === 'taxable' ? '5%' : '0%'})</div><div className="text-2xl font-black font-mono mt-1">${(formData.tax || 0).toLocaleString()}</div></div>
-                                                </div>
-                                                <div className="text-right mt-8 md:mt-0 w-full md:w-auto border-t md:border-t-0 md:border-l border-indigo-800 pt-6 md:pt-0 md:pl-16">
-                                                    <div className="text-[10px] uppercase font-bold text-indigo-300">含稅總計金額</div>
-                                                    <div className="text-5xl font-black font-mono text-emerald-400 mt-2">${(formData.total || 0).toLocaleString()}</div>
+                                            {/* 金額統計區與稅別選擇整合 */}
+                                            <div className={`p-8 rounded-[2.5rem] text-white shadow-2xl transition-all ${formData.status === 'void' ? 'bg-slate-700' : 'bg-indigo-900'}`}>
+                                                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-8">
+                                                    <div className="flex flex-col md:flex-row gap-12 w-full md:w-auto">
+                                                        <div>
+                                                            <div className="text-[10px] uppercase font-bold text-indigo-300 tracking-widest mb-2">銷售額 (未稅)</div>
+                                                            <div className="text-2xl font-black font-mono">${(formData.netAmount || 0).toLocaleString()}</div>
+                                                        </div>
+                                                        
+                                                        <div className="md:border-l md:border-indigo-800 md:pl-12 relative">
+                                                            <div className="flex justify-between items-center mb-2">
+                                                                <div className="text-[10px] uppercase font-bold text-indigo-300 tracking-widest">營業稅 ({formData.taxType === 'taxable' ? '5%' : '0%'})</div>
+                                                                {/* 整合稅別開關 */}
+                                                                <div className="flex p-1 bg-white/10 rounded-lg ml-4">
+                                                                    <button type="button" onClick={() => handleInputChange({target: {name: 'taxType', value: 'taxable'}})} className={`px-3 py-1 rounded-md text-[10px] font-bold transition-all ${formData.taxType === 'taxable' ? 'bg-indigo-500 text-white' : 'text-indigo-300 hover:text-white'}`}>應稅</button>
+                                                                    <button type="button" onClick={() => handleInputChange({target: {name: 'taxType', value: 'exempt'}})} className={`px-3 py-1 rounded-md text-[10px] font-bold transition-all ${formData.taxType === 'exempt' ? 'bg-indigo-500 text-white' : 'text-indigo-300 hover:text-white'}`}>免稅</button>
+                                                                </div>
+                                                            </div>
+                                                            <div className="text-2xl font-black font-mono">${(formData.tax || 0).toLocaleString()}</div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="text-right w-full md:w-auto border-t md:border-t-0 md:border-l border-indigo-800 pt-6 md:pt-0 md:pl-16">
+                                                        <div className="text-[10px] uppercase font-bold text-indigo-300 tracking-widest">含稅總計金額</div>
+                                                        <div className="text-5xl font-black font-mono text-emerald-400 mt-2">${(formData.total || 0).toLocaleString()}</div>
+                                                    </div>
                                                 </div>
                                             </div>
                                             
