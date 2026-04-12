@@ -20,6 +20,11 @@
         @keyframes slideIn { from { transform: translateY(-10px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
         .animate-slide-in { animation: slideIn 0.3s ease-out forwards; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
+        /* 為下拉選單增加客製化捲軸 */
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-800">
@@ -33,11 +38,7 @@
         const supabase = Object.assign(window['supabase']).createClient(SUPABASE_URL, SUPABASE_KEY);
 
         const COLORS = { 
-            primary: '#4f46e5', 
-            success: '#10b981', 
-            warning: '#f59e0b', 
-            danger: '#ef4444', 
-            accent: '#8b5cf6',
+            primary: '#4f46e5', success: '#10b981', warning: '#f59e0b', danger: '#ef4444', accent: '#8b5cf6',
             chart: ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4']
         };
 
@@ -58,29 +59,32 @@
             for (let i = 0; i < text.length; i++) {
                 const char = text[i];
                 if (char === '"') {
-                    if (inQuotes && text[i + 1] === '"') {
-                        current += '"'; i++; 
-                    } else {
-                        inQuotes = !inQuotes;
-                    }
-                } else if (char === ',' && !inQuotes) {
-                    result.push(current.trim());
-                    current = "";
-                } else {
-                    current += char;
-                }
+                    if (inQuotes && text[i + 1] === '"') { current += '"'; i++; } else { inQuotes = !inQuotes; }
+                } else if (char === ',' && !inQuotes) { result.push(current.trim()); current = ""; } 
+                else { current += char; }
             }
             result.push(current.trim());
             return result;
         };
 
         function App() {
+            // --- 核心資料狀態 ---
             const [invoices, setInvoices] = useState(() => {
                 const saved = localStorage.getItem('nextgen_invoices_supabase');
                 return saved ? JSON.parse(saved) : [];
             });
+
+            // 新增：商品主檔庫 (Master Data) - 未來可對接其他系統
+            const [productMaster, setProductMaster] = useState(() => {
+                const saved = localStorage.getItem('nextgen_product_master');
+                return saved ? JSON.parse(saved) : [
+                    { id: '1', name: '企業版系統授權', specs: '年度訂閱', unitPrice: 36000 },
+                    { id: '2', name: '專業技術顧問時數', specs: '10小時包', unitPrice: 15000 },
+                    { id: '3', name: '伺服器代管服務', specs: 'AWS / 月繳', unitPrice: 2500 }
+                ];
+            });
             
-            const [activeTab, setActiveTab] = useState('help');
+            const [activeTab, setActiveTab] = useState('entry');
             const [toast, setToast] = useState(null);
             const [expandedInvoiceId, setExpandedInvoiceId] = useState(null);
             const [syncStatus, setSyncStatus] = useState('idle');
@@ -89,65 +93,42 @@
             const [filterType, setFilterType] = useState('ALL');
             const [filterTrans, setFilterTrans] = useState('ALL');
 
-            // 擴充圖表 Refs
-            const chartRefs = { 
-                trend: useRef(null), 
-                salesDoughnut: useRef(null), 
-                purchaseDoughnut: useRef(null),
-                salesBar: useRef(null),
-                purchaseBar: useRef(null)
-            };
+            const [focusedItemIndex, setFocusedItemIndex] = useState(null); // 追蹤哪個品項正在輸入以顯示選單
+
+            const chartRefs = { trend: useRef(null), salesDoughnut: useRef(null), purchaseDoughnut: useRef(null), salesBar: useRef(null), purchaseBar: useRef(null) };
             const chartInstances = useRef({});
 
             const [formData, setFormData] = useState({
-                transactionType: '銷項',
-                invoiceType: '三聯式', 
-                taxType: 'taxable', 
-                invoiceNumber: '', 
-                vendorName: '', 
-                date: new Date().toISOString().split('T')[0], 
-                taxId: '', 
-                items: [], 
-                netAmount: 0, 
-                tax: 0, 
-                total: 0, 
-                status: 'active'
+                transactionType: '銷項', invoiceType: '三聯式', taxType: 'taxable', 
+                invoiceNumber: '', vendorName: '', date: new Date().toISOString().split('T')[0], 
+                taxId: '', items: [], netAmount: 0, tax: 0, total: 0, status: 'active'
             });
 
-            useEffect(() => {
-                localStorage.setItem('nextgen_invoices_supabase', JSON.stringify(invoices));
-            }, [invoices]);
+            // --- 持久化與雲端同步 ---
+            useEffect(() => { localStorage.setItem('nextgen_invoices_supabase', JSON.stringify(invoices)); }, [invoices]);
+            useEffect(() => { localStorage.setItem('nextgen_product_master', JSON.stringify(productMaster)); }, [productMaster]);
 
             useEffect(() => {
                 const performSync = async () => {
                     if (invoices.length === 0) return;
                     setSyncStatus('syncing');
-                    const syncData = invoices.map(inv => ({
-                        id: inv.invoiceNumber,
-                        data: { ...inv, items: inv.items || [] },
-                        updated_at: new Date()
-                    }));
+                    const syncData = invoices.map(inv => ({ id: inv.invoiceNumber, data: { ...inv, items: inv.items || [] }, updated_at: new Date() }));
                     const { error } = await supabase.from('invoices').upsert(syncData);
                     if (error) setSyncStatus('error');
-                    else {
-                        setSyncStatus('success');
-                        setTimeout(() => setSyncStatus('idle'), 2000);
-                    }
+                    else { setSyncStatus('success'); setTimeout(() => setSyncStatus('idle'), 2000); }
                 };
                 const timer = setTimeout(performSync, 1500);
                 return () => clearTimeout(timer);
             }, [invoices]);
 
-            // 圖表生成邏輯：進銷項分離顯示
+            // --- 儀表板圖表邏輯 ---
             useEffect(() => {
                 if (activeTab === 'dashboard') {
                     Object.values(chartInstances.current).forEach(c => c?.destroy());
                     const activeInvoices = invoices.filter(i => i.status !== 'void');
 
-                    // 1. 收支趨勢 (Trend)
                     if (chartRefs.trend.current) {
-                        const salesMap = {};
-                        const purchaseMap = {};
+                        const salesMap = {}; const purchaseMap = {};
                         [...activeInvoices].sort((a,b)=>new Date(a.date)-new Date(b.date)).forEach(inv => {
                             const month = inv.date.substring(0, 7);
                             if (inv.transactionType === '進項') purchaseMap[month] = (purchaseMap[month] || 0) + (inv.total || 0);
@@ -156,64 +137,50 @@
                         const labels = [...new Set([...Object.keys(salesMap), ...Object.keys(purchaseMap)])].sort();
                         chartInstances.current.trend = new Chart(chartRefs.trend.current, {
                             type: 'line',
-                            data: { 
-                                labels, 
-                                datasets: [
-                                    { label: '銷項 (營收)', data: labels.map(l => salesMap[l] || 0), borderColor: COLORS.primary, backgroundColor: 'rgba(79, 70, 229, 0.1)', fill: true, tension: 0.4 },
-                                    { label: '進項 (支出)', data: labels.map(l => purchaseMap[l] || 0), borderColor: COLORS.danger, backgroundColor: 'rgba(239, 68, 68, 0.1)', fill: true, tension: 0.4 }
-                                ] 
-                            },
+                            data: { labels, datasets: [
+                                { label: '銷項 (營收)', data: labels.map(l => salesMap[l] || 0), borderColor: COLORS.primary, backgroundColor: 'rgba(79, 70, 229, 0.1)', fill: true, tension: 0.4 },
+                                { label: '進項 (支出)', data: labels.map(l => purchaseMap[l] || 0), borderColor: COLORS.danger, backgroundColor: 'rgba(239, 68, 68, 0.1)', fill: true, tension: 0.4 }
+                            ]},
                             options: { responsive: true, maintainAspectRatio: false }
                         });
                     }
 
-                    // 2. 銷項結構 (Sales Type Doughnut)
                     if (chartRefs.salesDoughnut.current) {
                         const salesOnly = activeInvoices.filter(i => i.transactionType === '銷項');
                         const b2b = salesOnly.filter(i => i.invoiceType === '三聯式').length;
                         const b2c = salesOnly.filter(i => i.invoiceType === '二聯式').length;
                         chartInstances.current.salesDoughnut = new Chart(chartRefs.salesDoughnut.current, {
-                            type: 'doughnut',
-                            data: { labels: ['三聯 (B2B)', '二聯 (B2C)'], datasets: [{ data: [b2b, b2c], backgroundColor: [COLORS.accent, COLORS.warning], borderWidth: 0 }] },
+                            type: 'doughnut', data: { labels: ['三聯 (B2B)', '二聯 (B2C)'], datasets: [{ data: [b2b, b2c], backgroundColor: [COLORS.accent, COLORS.warning], borderWidth: 0 }] },
                             options: { responsive: true, maintainAspectRatio: false, cutout: '70%', plugins: { legend: { position: 'bottom' } } }
                         });
                     }
 
-                    // 3. 進項稅別 (Purchase Tax Doughnut)
                     if (chartRefs.purchaseDoughnut.current) {
                         const purchaseOnly = activeInvoices.filter(i => i.transactionType === '進項');
                         const taxable = purchaseOnly.filter(i => i.taxType === 'taxable').length;
                         const exempt = purchaseOnly.filter(i => i.taxType === 'exempt').length;
                         chartInstances.current.purchaseDoughnut = new Chart(chartRefs.purchaseDoughnut.current, {
-                            type: 'doughnut',
-                            data: { labels: ['應稅 (可抵扣)', '免稅'], datasets: [{ data: [taxable, exempt], backgroundColor: [COLORS.success, COLORS.chart[2]], borderWidth: 0 }] },
+                            type: 'doughnut', data: { labels: ['應稅 (可抵扣)', '免稅'], datasets: [{ data: [taxable, exempt], backgroundColor: [COLORS.success, COLORS.chart[2]], borderWidth: 0 }] },
                             options: { responsive: true, maintainAspectRatio: false, cutout: '70%', plugins: { legend: { position: 'bottom' } } }
                         });
                     }
 
-                    // 4. 銷項品項排行 (Sales Bar)
                     if (chartRefs.salesBar.current) {
                         const itemMap = {};
                         activeInvoices.filter(i => i.transactionType === '銷項').forEach(inv => (inv.items || []).forEach(it => { itemMap[it.name] = (itemMap[it.name] || 0) + (it.amount || 0); }));
                         const sorted = Object.keys(itemMap).map(n => ({ n, v: itemMap[n] })).sort((a,b) => b.v - a.v).slice(0, 5);
                         chartInstances.current.salesBar = new Chart(chartRefs.salesBar.current, {
-                            type: 'bar',
-                            data: { labels: sorted.map(d=>d.n), datasets: [{ data: sorted.map(d=>d.v), backgroundColor: COLORS.chart, borderRadius: 8 }] },
+                            type: 'bar', data: { labels: sorted.map(d=>d.n), datasets: [{ data: sorted.map(d=>d.v), backgroundColor: COLORS.chart, borderRadius: 8 }] },
                             options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
                         });
                     }
 
-                    // 5. 進項供應商排行 (Purchase Bar)
                     if (chartRefs.purchaseBar.current) {
                         const vendorMap = {};
-                        activeInvoices.filter(i => i.transactionType === '進項').forEach(inv => {
-                            const name = inv.vendorName || '未註明公司';
-                            vendorMap[name] = (vendorMap[name] || 0) + (inv.total || 0);
-                        });
+                        activeInvoices.filter(i => i.transactionType === '進項').forEach(inv => { vendorMap[inv.vendorName || '未註明'] = (vendorMap[inv.vendorName || '未註明'] || 0) + (inv.total || 0); });
                         const sorted = Object.keys(vendorMap).map(n => ({ n, v: vendorMap[n] })).sort((a,b) => b.v - a.v).slice(0, 5);
                         chartInstances.current.purchaseBar = new Chart(chartRefs.purchaseBar.current, {
-                            type: 'bar',
-                            data: { labels: sorted.map(d=>d.n), datasets: [{ data: sorted.map(d=>d.v), backgroundColor: COLORS.danger, borderRadius: 8 }] },
+                            type: 'bar', data: { labels: sorted.map(d=>d.n), datasets: [{ data: sorted.map(d=>d.v), backgroundColor: COLORS.danger, borderRadius: 8 }] },
                             options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
                         });
                     }
@@ -253,17 +220,50 @@
                 setFormData({ ...formData, items, netAmount, tax, total: netAmount + tax });
             };
 
+            // 新增：應用商品主檔資料到品項
+            const applyProductToItem = (idx, product) => {
+                const items = [...formData.items];
+                items[idx].name = product.name;
+                items[idx].specs = product.specs || '';
+                items[idx].unitPrice = product.unitPrice || 0;
+                items[idx].amount = Math.round((parseFloat(items[idx].quantity) || 0) * (parseFloat(product.unitPrice) || 0));
+                
+                const netAmount = items.reduce((s, it) => s + (it.amount || 0), 0);
+                const tax = formData.taxType === 'taxable' ? Math.round(netAmount * 0.05) : 0;
+                setFormData({ ...formData, items, netAmount, tax, total: netAmount + tax });
+                setFocusedItemIndex(null);
+            };
+
             const handleSubmit = (e) => {
                 e.preventDefault();
                 if (!formData.invoiceNumber.match(/^[A-Z]{2}-\d{8}$/)) return showToast("發票格式錯誤 (AA-12345678)");
+                
+                // 動態主檔學習引擎 (Auto-learning Master Data)
+                const newMaster = [...productMaster];
+                let isMasterUpdated = false;
+                formData.items.forEach(it => {
+                    if (!it.name) return;
+                    const existingIdx = newMaster.findIndex(p => p.name === it.name);
+                    if (existingIdx >= 0) {
+                        // 若價格或規格有變，自動更新主檔
+                        if (newMaster[existingIdx].unitPrice != it.unitPrice || newMaster[existingIdx].specs !== it.specs) {
+                            newMaster[existingIdx] = { ...newMaster[existingIdx], unitPrice: parseFloat(it.unitPrice)||0, specs: it.specs };
+                            isMasterUpdated = true;
+                        }
+                    } else {
+                        // 新商品自動建檔
+                        newMaster.push({ id: generateItemId(), name: it.name, specs: it.specs, unitPrice: parseFloat(it.unitPrice)||0 });
+                        isMasterUpdated = true;
+                    }
+                });
+                if (isMasterUpdated) setProductMaster(newMaster);
+
                 setInvoices([{ ...formData, id: Date.now().toString() }, ...invoices.filter(i => i.invoiceNumber !== formData.invoiceNumber)]);
-                showToast("數據存檔成功並同步至雲端");
+                showToast("數據存檔成功，商品主檔已同步更新");
                 setFormData({ ...formData, invoiceNumber: '', taxId: '', vendorName: '', items: [], netAmount: 0, tax: 0, total: 0 });
             };
 
-            const handleFormKeyDown = (e) => {
-                if (e.key === 'Enter') e.preventDefault();
-            };
+            const handleFormKeyDown = (e) => { if (e.key === 'Enter') e.preventDefault(); };
 
             const exportCSV = () => {
                 const filtered = invoices.filter(i => {
@@ -275,22 +275,9 @@
                 const headers = ['狀態', '類型', '發票類型', '期別', '稅別', '發票號碼', '對方公司', '開立日期', '統編', '銷售額', '稅額', '總計', '品項', '規格', '數量', '單價', '小計'];
                 const csvRows = [headers.join(',')];
                 filtered.forEach(inv => {
-                    const base = [
-                        `"${inv.status==='void'?'作廢':'正常'}"`, 
-                        `"${inv.transactionType || '銷項'}"`,
-                        `"${inv.invoiceType}"`, 
-                        `"${getInvoicePeriod(inv.date)}"`, 
-                        `"${inv.taxType==='taxable'?'應稅':'免稅'}"`, 
-                        `"${inv.invoiceNumber}"`, 
-                        `"${(inv.vendorName || '').replace(/"/g, '""')}"`,
-                        `"${inv.date}"`, 
-                        `"${inv.taxId||''}"`, 
-                        inv.netAmount, inv.tax, inv.total
-                    ];
+                    const base = [`"${inv.status==='void'?'作廢':'正常'}"`, `"${inv.transactionType || '銷項'}"`, `"${inv.invoiceType}"`, `"${getInvoicePeriod(inv.date)}"`, `"${inv.taxType==='taxable'?'應稅':'免稅'}"`, `"${inv.invoiceNumber}"`, `"${(inv.vendorName || '').replace(/"/g, '""')}"`, `"${inv.date}"`, `"${inv.taxId||''}"`, inv.netAmount, inv.tax, inv.total];
                     if (inv.items && inv.items.length > 0) {
-                        inv.items.forEach(it => {
-                            csvRows.push([...base, `"${(it.name||'').replace(/"/g,'""')}"`, `"${(it.specs||'').replace(/"/g,'""')}"`, it.quantity, it.unitPrice, it.amount].join(','));
-                        });
+                        inv.items.forEach(it => { csvRows.push([...base, `"${(it.name||'').replace(/"/g,'""')}"`, `"${(it.specs||'').replace(/"/g,'""')}"`, it.quantity, it.unitPrice, it.amount].join(',')); });
                     } else { csvRows.push([...base, '""', '""', 0, 0, 0].join(',')); }
                 });
                 const blob = new Blob(['\uFEFF' + csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
@@ -323,19 +310,9 @@
                             const invNum = cols[5];
                             if (!invoiceMap.has(invNum)) {
                                 invoiceMap.set(invNum, {
-                                    status: cols[0] === '作廢' ? 'void' : 'active',
-                                    transactionType: cols[1],
-                                    invoiceType: cols[2],
-                                    taxType: cols[4] === '應稅' ? 'taxable' : 'exempt',
-                                    invoiceNumber: invNum,
-                                    vendorName: cols[6],
-                                    date: cols[7],
-                                    taxId: cols[8],
-                                    netAmount: parseFloat(cols[9]) || 0,
-                                    tax: parseFloat(cols[10]) || 0,
-                                    total: parseFloat(cols[11]) || 0,
-                                    items: [],
-                                    id: Date.now().toString() + i
+                                    status: cols[0] === '作廢' ? 'void' : 'active', transactionType: cols[1], invoiceType: cols[2], taxType: cols[4] === '應稅' ? 'taxable' : 'exempt',
+                                    invoiceNumber: invNum, vendorName: cols[6], date: cols[7], taxId: cols[8], netAmount: parseFloat(cols[9]) || 0, tax: parseFloat(cols[10]) || 0, total: parseFloat(cols[11]) || 0,
+                                    items: [], id: Date.now().toString() + i
                                 });
                             }
                             const inv = invoiceMap.get(invNum);
@@ -367,9 +344,12 @@
                             <button onClick={() => setActiveTab('list')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all ${activeTab === 'list' ? 'bg-indigo-600 text-white shadow-lg' : 'hover:bg-slate-800'}`}><i className="ph ph-list-dashes"></i> 整合明細清單</button>
                         </nav>
                         <div className="p-6 mt-auto border-t border-slate-800 text-center">
-                            <div className="bg-slate-800 rounded-2xl p-4 flex items-center justify-center gap-2">
-                                <div className={`w-2.5 h-2.5 rounded-full ${syncStatus === 'syncing' ? 'bg-amber-400 animate-pulse' : syncStatus === 'error' ? 'bg-red-500' : 'bg-emerald-500'}`}></div>
-                                <span className="text-[10px] font-bold text-slate-400">SUPABASE SECURE</span>
+                            <div className="bg-slate-800 rounded-2xl p-4 flex flex-col items-center justify-center gap-2">
+                                <div className="flex items-center gap-2">
+                                    <div className={`w-2.5 h-2.5 rounded-full ${syncStatus === 'syncing' ? 'bg-amber-400 animate-pulse' : syncStatus === 'error' ? 'bg-red-500' : 'bg-emerald-500'}`}></div>
+                                    <span className="text-[10px] font-bold text-slate-400">SUPABASE SECURE</span>
+                                </div>
+                                <div className="text-[10px] font-bold text-indigo-400 mt-1"><i className="ph ph-database"></i> 商品庫已建檔: {productMaster.length} 筆</div>
                             </div>
                         </div>
                     </aside>
@@ -380,12 +360,12 @@
                         {activeTab === 'help' && (
                             <div className="max-w-4xl mx-auto space-y-8 animate-slide-in">
                                 <header className="bg-indigo-900 p-12 rounded-[3.5rem] text-white shadow-2xl text-center">
-                                    <h2 className="text-4xl font-black mb-4">進銷項管理系統 4.0</h2>
-                                    <p className="text-indigo-200 text-lg font-medium italic">「決策級視覺化重構，洞察營運的每一分脈動。」</p>
+                                    <h2 className="text-4xl font-black mb-4">自動化建檔引擎 5.0</h2>
+                                    <p className="text-indigo-200 text-lg font-medium italic">「打字交給系統，您的精力應該放在分析。」</p>
                                 </header>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                                    <div className="bg-white p-8 rounded-[2rem] border shadow-sm"><h4 className="font-black text-indigo-700 mb-3 flex items-center gap-2"><i className="ph ph-presentation-chart text-2xl"></i> 全新分析介面</h4><p className="text-sm text-slate-500 leading-relaxed font-medium">儀表板現在會自動分離銷項與進項的指標。包含營收結構分析、成本對沖趨勢，以及關鍵品項與供應商的權重展示。</p></div>
-                                    <div className="bg-white p-8 rounded-[2rem] border shadow-sm"><h4 className="font-black text-emerald-700 mb-3 flex items-center gap-2"><i className="ph ph-funnel text-2xl"></i> 三維篩選保留</h4><p className="text-sm text-slate-500 leading-relaxed font-medium">整合清單具備「收支、期別、格式」三大篩選器，與圖表數據相呼應，確保錄入與分析的精確度。</p></div>
+                                    <div className="bg-white p-8 rounded-[2rem] border shadow-sm"><h4 className="font-black text-indigo-700 mb-3 flex items-center gap-2"><i className="ph ph-magic-wand text-2xl"></i> 商品主檔智能連動</h4><p className="text-sm text-slate-500 leading-relaxed font-medium">在輸入商品時，系統會自動比對主檔庫，提供下拉選單。點擊後一秒補齊規格與單價，徹底消滅重複的鍵盤敲擊。</p></div>
+                                    <div className="bg-white p-8 rounded-[2rem] border shadow-sm"><h4 className="font-black text-emerald-700 mb-3 flex items-center gap-2"><i className="ph ph-brain text-2xl"></i> 自我學習，預留接口</h4><p className="text-sm text-slate-500 leading-relaxed font-medium">當您輸入全新的商品並存檔時，系統會默默將它加入商品庫。這份獨立架構，未來隨時可開放 API 與其他 ERP / 庫存系統無縫對接。</p></div>
                                 </div>
                             </div>
                         )}
@@ -396,48 +376,16 @@
                                     <h2 className="text-4xl font-black text-slate-900 italic underline decoration-indigo-500">戰情儀表板</h2>
                                     <p className="text-slate-400 text-sm font-bold">資料更新：{new Date().toLocaleString()}</p>
                                 </div>
-                                
-                                {/* 核心指標卡片 */}
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                                    <div className="bg-white p-6 rounded-3xl border shadow-sm"><div className="text-xs font-bold text-slate-400">總銷項金額 (營收)</div><div className="text-4xl font-black mt-1 text-indigo-600">${invoices.filter(i=>i.transactionType!=='進項'&&i.status!=='void').reduce((s,i)=>s+(i.total||0),0).toLocaleString()}</div></div>
-                                    <div className="bg-white p-6 rounded-3xl border shadow-sm"><div className="text-xs font-bold text-slate-400">總進項金額 (成本)</div><div className="text-4xl font-black mt-1 text-red-500">${invoices.filter(i=>i.transactionType==='進項'&&i.status!=='void').reduce((s,i)=>s+(i.total||0),0).toLocaleString()}</div></div>
-                                    <div className="bg-slate-900 p-6 rounded-3xl shadow-xl text-white"><div className="text-xs font-bold text-slate-400">預計淨營業稅額</div><div className="text-4xl font-black mt-1 text-emerald-400">${(invoices.filter(i=>i.transactionType!=='進項'&&i.status!=='void').reduce((s,i)=>s+(i.tax||0),0) - invoices.filter(i=>i.transactionType==='進項'&&i.status!=='void').reduce((s,i)=>s+(i.tax||0),0)).toLocaleString()}</div></div>
+                                <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                                    <div className="bg-white p-6 rounded-3xl border shadow-sm"><div className="text-xs font-bold text-slate-400">總銷項金額 (營收)</div><div className="text-3xl font-black mt-1 text-indigo-600">${invoices.filter(i=>i.transactionType!=='進項'&&i.status!=='void').reduce((s,i)=>s+(i.total||0),0).toLocaleString()}</div></div>
+                                    <div className="bg-white p-6 rounded-3xl border shadow-sm"><div className="text-xs font-bold text-slate-400">總進項金額 (成本)</div><div className="text-3xl font-black mt-1 text-red-500">${invoices.filter(i=>i.transactionType==='進項'&&i.status!=='void').reduce((s,i)=>s+(i.total||0),0).toLocaleString()}</div></div>
+                                    <div className="bg-slate-900 p-6 rounded-3xl shadow-xl text-white"><div className="text-xs font-bold text-slate-400">預計淨營業稅額</div><div className="text-3xl font-black mt-1 text-emerald-400">${(invoices.filter(i=>i.transactionType!=='進項'&&i.status!=='void').reduce((s,i)=>s+(i.tax||0),0) - invoices.filter(i=>i.transactionType==='進項'&&i.status!=='void').reduce((s,i)=>s+(i.tax||0),0)).toLocaleString()}</div></div>
+                                    <div className="bg-indigo-50 p-6 rounded-3xl border border-indigo-100"><div className="text-xs font-bold text-indigo-400">商品主檔庫存 (預備對接)</div><div className="text-3xl font-black mt-1 text-indigo-800 flex items-center gap-2"><i className="ph ph-database"></i> {productMaster.length} <span className="text-sm">項</span></div></div>
                                 </div>
-
-                                {/* 主趨勢圖 */}
                                 <div className="bg-white p-10 rounded-[3rem] border shadow-sm h-96"><h4 className="font-black text-slate-800 text-lg mb-6 flex items-center gap-2"><i className="ph ph-chart-line text-indigo-500"></i> 收支對比趨勢 (Monthly Trend)</h4><div className="h-72"><canvas ref={chartRefs.trend}></canvas></div></div>
-
-                                {/* 分析矩陣 */}
                                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                                    {/* 銷項分析區 */}
-                                    <div className="bg-white p-8 rounded-[3rem] border border-indigo-100 shadow-sm space-y-8">
-                                        <h4 className="font-black text-indigo-800 border-b pb-4 flex items-center gap-2"><i className="ph ph-hand-coins"></i> 銷項數據深度分析</h4>
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                                            <div className="h-60 flex flex-col items-center">
-                                                <div className="text-xs font-bold text-slate-400 mb-4">營收結構 (B2B vs B2C)</div>
-                                                <div className="flex-1 w-full"><canvas ref={chartRefs.salesDoughnut}></canvas></div>
-                                            </div>
-                                            <div className="h-60 flex flex-col items-center">
-                                                <div className="text-xs font-bold text-slate-400 mb-4">熱銷品項 Top 5 (金額)</div>
-                                                <div className="flex-1 w-full"><canvas ref={chartRefs.salesBar}></canvas></div>
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    {/* 進項分析區 */}
-                                    <div className="bg-white p-8 rounded-[3rem] border border-red-100 shadow-sm space-y-8">
-                                        <h4 className="font-black text-red-800 border-b pb-4 flex items-center gap-2"><i className="ph ph-shopping-cart"></i> 進項數據深度分析</h4>
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                                            <div className="h-60 flex flex-col items-center">
-                                                <div className="text-xs font-bold text-slate-400 mb-4">支出稅別比例 (抵扣分析)</div>
-                                                <div className="flex-1 w-full"><canvas ref={chartRefs.purchaseDoughnut}></canvas></div>
-                                            </div>
-                                            <div className="h-60 flex flex-col items-center">
-                                                <div className="text-xs font-bold text-slate-400 mb-4">供應商成本排行 Top 5</div>
-                                                <div className="flex-1 w-full"><canvas ref={chartRefs.purchaseBar}></canvas></div>
-                                            </div>
-                                        </div>
-                                    </div>
+                                    <div className="bg-white p-8 rounded-[3rem] border border-indigo-100 shadow-sm space-y-8"><h4 className="font-black text-indigo-800 border-b pb-4 flex items-center gap-2"><i className="ph ph-hand-coins"></i> 銷項數據深度分析</h4><div className="grid grid-cols-1 md:grid-cols-2 gap-8"><div className="h-60 flex flex-col items-center"><div className="text-xs font-bold text-slate-400 mb-4">營收結構 (B2B vs B2C)</div><div className="flex-1 w-full"><canvas ref={chartRefs.salesDoughnut}></canvas></div></div><div className="h-60 flex flex-col items-center"><div className="text-xs font-bold text-slate-400 mb-4">熱銷品項 Top 5 (金額)</div><div className="flex-1 w-full"><canvas ref={chartRefs.salesBar}></canvas></div></div></div></div>
+                                    <div className="bg-white p-8 rounded-[3rem] border border-red-100 shadow-sm space-y-8"><h4 className="font-black text-red-800 border-b pb-4 flex items-center gap-2"><i className="ph ph-shopping-cart"></i> 進項數據深度分析</h4><div className="grid grid-cols-1 md:grid-cols-2 gap-8"><div className="h-60 flex flex-col items-center"><div className="text-xs font-bold text-slate-400 mb-4">支出稅別比例 (抵扣分析)</div><div className="flex-1 w-full"><canvas ref={chartRefs.purchaseDoughnut}></canvas></div></div><div className="h-60 flex flex-col items-center"><div className="text-xs font-bold text-slate-400 mb-4">供應商成本排行 Top 5</div><div className="flex-1 w-full"><canvas ref={chartRefs.purchaseBar}></canvas></div></div></div></div>
                                 </div>
                             </div>
                         )}
@@ -465,12 +413,45 @@
                                             {formData.invoiceType === '三聯式' && <div className="space-y-1"><label className="text-[10px] font-black text-indigo-500 uppercase tracking-widest">統編 (8碼)</label><input type="text" name="taxId" value={formData.taxId} onChange={handleInputChange} maxLength={8} className="w-full px-5 py-4 rounded-2xl border bg-indigo-50/20 font-mono outline-none focus:border-indigo-500 transition-colors" /></div>}
                                             {formData.transactionType === '進項' && <div className="md:col-span-2 lg:col-span-3 space-y-1"><label className="text-[10px] font-black text-red-500 uppercase tracking-widest">對方公司名稱 (供應商)</label><input type="text" name="vendorName" value={formData.vendorName} onChange={handleInputChange} className="w-full px-5 py-4 rounded-2xl border bg-red-50/10 font-bold outline-none focus:border-red-500 transition-colors" placeholder="例：鼎新電腦股份有限公司" /></div>}
                                         </div>
+                                        
                                         <div className="pt-8 border-t border-slate-100">
                                             <div className="flex justify-between items-center mb-6"><h3 className="font-black text-lg">品項明細紀錄</h3><button type="button" onClick={()=>setFormData(p=>({...p, items:[...p.items, {id:generateItemId(), name:'', specs:'', quantity:1, unitPrice:'', amount:0}]}))} className="bg-indigo-50 text-indigo-700 px-6 py-2 rounded-xl text-xs font-black hover:bg-indigo-100 transition-all">+ 新增明細</button></div>
                                             <div className="space-y-4">
                                                 {formData.items.map((it, i) => (
                                                     <div key={it.id} className="flex flex-col md:flex-row gap-4 p-6 bg-slate-50 rounded-[2rem] border relative group transition-all hover:bg-white hover:shadow-xl">
-                                                        <div className="flex-1 flex flex-col gap-3"><input type="text" placeholder="品名內容" value={it.name} onChange={e=>handleItemChange(i, 'name', e.target.value)} className="bg-transparent text-sm font-black outline-none border-b border-transparent focus:border-indigo-500" /><input type="text" placeholder="規格描述" value={it.specs} onChange={e=>handleItemChange(i, 'specs', e.target.value)} className="bg-transparent text-[10px] text-slate-400 outline-none italic font-bold" /></div>
+                                                        <div className="flex-1 flex flex-col gap-3 relative">
+                                                            {/* 品名輸入與自動完成選單 */}
+                                                            <input 
+                                                                type="text" 
+                                                                placeholder="輸入商品關鍵字自動搜尋..." 
+                                                                value={it.name} 
+                                                                onChange={e => handleItemChange(i, 'name', e.target.value)} 
+                                                                onFocus={() => setFocusedItemIndex(i)}
+                                                                onBlur={() => setTimeout(() => setFocusedItemIndex(null), 200)}
+                                                                className="bg-transparent text-sm font-black outline-none border-b border-transparent focus:border-indigo-500 transition-all placeholder:font-medium" 
+                                                            />
+                                                            {/* 智慧下拉選單 (Autocomplete) */}
+                                                            {focusedItemIndex === i && it.name && (
+                                                                <div className="absolute top-full left-0 mt-2 w-full bg-white border border-slate-200 shadow-2xl rounded-2xl z-50 max-h-56 overflow-y-auto custom-scrollbar animate-slide-in">
+                                                                    <div className="text-[10px] font-black text-slate-400 p-3 bg-slate-50 border-b border-slate-100 uppercase tracking-widest sticky top-0">從主檔庫選擇快速帶入</div>
+                                                                    {productMaster.filter(p => p.name.toLowerCase().includes(it.name.toLowerCase())).length === 0 ? (
+                                                                        <div className="p-4 text-xs text-slate-400 italic font-bold">新商品！儲存後將自動加入主檔庫。</div>
+                                                                    ) : (
+                                                                        productMaster.filter(p => p.name.toLowerCase().includes(it.name.toLowerCase())).map(p => (
+                                                                            <div key={p.id} onClick={() => applyProductToItem(i, p)} className="p-4 hover:bg-indigo-50 cursor-pointer border-b border-slate-50 last:border-0 transition-colors group">
+                                                                                <div className="font-black text-indigo-700 text-sm group-hover:text-indigo-900">{p.name}</div>
+                                                                                <div className="text-[11px] text-slate-500 flex justify-between mt-1">
+                                                                                    <span>規格: <span className="font-bold text-slate-700">{p.specs || '無'}</span></span>
+                                                                                    <span className="font-mono font-bold text-emerald-600">${p.unitPrice.toLocaleString()}</span>
+                                                                                </div>
+                                                                            </div>
+                                                                        ))
+                                                                    )}
+                                                                </div>
+                                                            )}
+                                                            
+                                                            <input type="text" placeholder="規格描述" value={it.specs} onChange={e=>handleItemChange(i, 'specs', e.target.value)} className="bg-transparent text-[10px] text-slate-400 outline-none italic font-bold" />
+                                                        </div>
                                                         <div className="flex gap-6 items-end">
                                                             <div className="flex flex-col"><label className="text-[8px] text-slate-400 font-black mb-1">數量</label><input type="number" onKeyDown={(e)=>["-","e","+"].includes(e.key)&&e.preventDefault()} value={it.quantity} onChange={e=>handleItemChange(i, 'quantity', e.target.value)} className="w-20 py-2 px-3 text-center text-sm rounded-xl border bg-white font-mono" /></div>
                                                             <div className="flex flex-col"><label className="text-[8px] text-slate-400 font-black mb-1">單價</label><input type="number" onKeyDown={(e)=>["-","e","+"].includes(e.key)&&e.preventDefault()} value={it.unitPrice} onChange={e=>handleItemChange(i, 'unitPrice', e.target.value)} className="w-28 py-2 px-3 text-right text-sm rounded-xl border bg-white font-mono" /></div>
@@ -482,7 +463,7 @@
                                             </div>
                                         </div>
                                         <div className={`p-10 rounded-[3rem] text-white shadow-2xl transition-all ${formData.status==='void'?'bg-slate-700':formData.transactionType==='進項'?'bg-red-900':'bg-indigo-900'}`}><div className="flex flex-col md:flex-row justify-between items-center gap-12 font-black"><div className="flex gap-12"><div><div className="text-[10px] uppercase text-indigo-300 mb-3 tracking-widest">銷售淨額 (未稅)</div><div className="text-3xl font-mono">${(formData.netAmount||0).toLocaleString()}</div></div><div className="border-l border-white/10 pl-12"><div className="flex items-center gap-4 mb-3"><span className="text-[10px] text-indigo-300 uppercase">稅別</span><div className="flex p-0.5 bg-white/10 rounded-lg"><button type="button" onClick={()=>handleInputChange({target:{name:'taxType',value:'taxable'}})} className={`px-4 py-1 rounded-md text-[10px] ${formData.taxType==='taxable'?'bg-indigo-500 text-white':'text-indigo-200'}`}>應稅</button><button type="button" onClick={()=>handleInputChange({target:{name:'taxType',value:'exempt'}})} className={`px-4 py-1 rounded-md text-[10px] ${formData.taxType==='exempt'?'bg-indigo-500 text-white':'text-indigo-200'}`}>免稅</button></div></div><div className="text-3xl font-mono">${(formData.tax||0).toLocaleString()}</div></div></div><div className="text-right md:border-l md:border-white/10 md:pl-12 font-black"><div className="text-[10px] uppercase text-indigo-300 mb-3 tracking-widest">交易總額 (含稅)</div><div className="text-6xl text-emerald-400 font-mono tracking-tighter italic underline decoration-white/20">${(formData.total||0).toLocaleString()}</div></div></div></div>
-                                        <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 py-7 rounded-[2rem] font-black text-white text-2xl shadow-xl transition-all active:scale-[0.98] flex items-center justify-center gap-4"><i className="ph-fill ph-check-square"></i> 確認儲存並同步雲端</button>
+                                        <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 py-7 rounded-[2rem] font-black text-white text-2xl shadow-xl transition-all active:scale-[0.98] flex items-center justify-center gap-4"><i className="ph-fill ph-check-square"></i> 確認儲存並學習商品資料</button>
                                     </form>
                                 </div>
                             </div>
@@ -494,26 +475,9 @@
                                     <div><h2 className="text-3xl font-black text-slate-800 tracking-tight italic">發票整合清單</h2></div>
                                     <div className="flex flex-wrap gap-4 w-full md:w-auto">
                                         <label className="bg-white border-2 border-dashed border-indigo-200 text-indigo-600 px-6 py-2.5 rounded-2xl font-black flex items-center gap-2 shadow-sm text-xs cursor-pointer hover:bg-indigo-50 transition-all"><i className="ph ph-upload"></i> 從 CSV 還原<input type="file" accept=".csv" onChange={importCSV} className="hidden" /></label>
-                                        <div className="bg-white border px-4 py-2 rounded-2xl flex items-center gap-2 shadow-sm text-xs font-bold border-slate-200"><i className="ph ph-swap text-indigo-500"></i>
-                                            <select value={filterTrans} onChange={e=>setFilterTrans(e.target.value)} className="outline-none bg-transparent">
-                                                <option value="ALL">全部收支</option>
-                                                <option value="銷項">僅看銷項 (營收)</option>
-                                                <option value="進項">僅看進項 (成本)</option>
-                                            </select>
-                                        </div>
-                                        <div className="bg-white border px-4 py-2 rounded-2xl flex items-center gap-2 shadow-sm text-xs font-bold border-slate-200"><i className="ph ph-calendar text-indigo-500"></i>
-                                            <select value={filterPeriod} onChange={e=>setFilterPeriod(e.target.value)} className="outline-none bg-transparent">
-                                                <option value="ALL">全部期別</option>
-                                                {availablePeriods.map(p=><option key={p} value={p}>{p}</option>)}
-                                            </select>
-                                        </div>
-                                        <div className="bg-white border px-4 py-2 rounded-2xl flex items-center gap-2 shadow-sm text-xs font-bold border-slate-200"><i className="ph ph-receipt text-indigo-500"></i>
-                                            <select value={filterType} onChange={e=>setFilterType(e.target.value)} className="outline-none bg-transparent">
-                                                <option value="ALL">全部發票類型</option>
-                                                <option value="三聯式">三聯式 (B2B)</option>
-                                                <option value="二聯式">二聯式 (B2C)</option>
-                                            </select>
-                                        </div>
+                                        <div className="bg-white border px-4 py-2 rounded-2xl flex items-center gap-2 shadow-sm text-xs font-bold border-slate-200"><i className="ph ph-swap text-indigo-500"></i><select value={filterTrans} onChange={e=>setFilterTrans(e.target.value)} className="outline-none bg-transparent"><option value="ALL">全部收支</option><option value="銷項">僅看銷項 (營收)</option><option value="進項">僅看進項 (成本)</option></select></div>
+                                        <div className="bg-white border px-4 py-2 rounded-2xl flex items-center gap-2 shadow-sm text-xs font-bold border-slate-200"><i className="ph ph-calendar text-indigo-500"></i><select value={filterPeriod} onChange={e=>setFilterPeriod(e.target.value)} className="outline-none bg-transparent"><option value="ALL">全部期別</option>{availablePeriods.map(p=><option key={p} value={p}>{p}</option>)}</select></div>
+                                        <div className="bg-white border px-4 py-2 rounded-2xl flex items-center gap-2 shadow-sm text-xs font-bold border-slate-200"><i className="ph ph-receipt text-indigo-500"></i><select value={filterType} onChange={e=>setFilterType(e.target.value)} className="outline-none bg-transparent"><option value="ALL">全部發票類型</option><option value="三聯式">三聯式 (B2B)</option><option value="二聯式">二聯式 (B2C)</option></select></div>
                                         <button onClick={exportCSV} className="bg-emerald-600 text-white px-8 py-3 rounded-2xl font-black flex items-center gap-2 shadow-lg text-xs hover:bg-emerald-700 transition-all"><i className="ph ph-download"></i> 導出 CSV</button>
                                     </div>
                                 </header>
