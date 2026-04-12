@@ -20,7 +20,6 @@
         @keyframes slideIn { from { transform: translateY(-10px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
         .animate-slide-in { animation: slideIn 0.3s ease-out forwards; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
-        /* 為下拉選單增加客製化捲軸 */
         .custom-scrollbar::-webkit-scrollbar { width: 6px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 8px; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; }
@@ -68,23 +67,17 @@
         };
 
         function App() {
-            // --- 核心資料狀態 ---
             const [invoices, setInvoices] = useState(() => {
                 const saved = localStorage.getItem('nextgen_invoices_supabase');
                 return saved ? JSON.parse(saved) : [];
             });
 
-            // 新增：商品主檔庫 (Master Data) - 未來可對接其他系統
             const [productMaster, setProductMaster] = useState(() => {
                 const saved = localStorage.getItem('nextgen_product_master');
-                return saved ? JSON.parse(saved) : [
-                    { id: '1', name: '企業版系統授權', specs: '年度訂閱', unitPrice: 36000 },
-                    { id: '2', name: '專業技術顧問時數', specs: '10小時包', unitPrice: 15000 },
-                    { id: '3', name: '伺服器代管服務', specs: 'AWS / 月繳', unitPrice: 2500 }
-                ];
+                return saved ? JSON.parse(saved) : [];
             });
             
-            const [activeTab, setActiveTab] = useState('entry');
+            const [activeTab, setActiveTab] = useState('entry'); // 加入 'products'
             const [toast, setToast] = useState(null);
             const [expandedInvoiceId, setExpandedInvoiceId] = useState(null);
             const [syncStatus, setSyncStatus] = useState('idle');
@@ -92,8 +85,7 @@
             const [filterPeriod, setFilterPeriod] = useState('ALL');
             const [filterType, setFilterType] = useState('ALL');
             const [filterTrans, setFilterTrans] = useState('ALL');
-
-            const [focusedItemIndex, setFocusedItemIndex] = useState(null); // 追蹤哪個品項正在輸入以顯示選單
+            const [focusedItemIndex, setFocusedItemIndex] = useState(null);
 
             const chartRefs = { trend: useRef(null), salesDoughnut: useRef(null), purchaseDoughnut: useRef(null), salesBar: useRef(null), purchaseBar: useRef(null) };
             const chartInstances = useRef({});
@@ -104,22 +96,68 @@
                 taxId: '', items: [], netAmount: 0, tax: 0, total: 0, status: 'active'
             });
 
-            // --- 持久化與雲端同步 ---
+            const [newProductForm, setNewProductForm] = useState({ name: '', specs: '', unitPrice: '' });
+
+            // --- 全雲端資料初始化 (Fetch on Load) ---
+            useEffect(() => {
+                const fetchCloudData = async () => {
+                    setSyncStatus('syncing');
+                    try {
+                        const { data, error } = await supabase.from('invoices').select('*');
+                        if (error) throw error;
+                        
+                        if (data && data.length > 0) {
+                            const cloudInvoices = [];
+                            let cloudMaster = null;
+                            data.forEach(row => {
+                                // 智慧黑科技：識別隱藏在發票表內的商品主檔
+                                if (row.id === '__PRODUCT_MASTER__') {
+                                    cloudMaster = row.data?.products;
+                                } else if (row.data) {
+                                    cloudInvoices.push(row.data);
+                                }
+                            });
+                            
+                            if (cloudInvoices.length > 0) setInvoices(cloudInvoices);
+                            if (cloudMaster) setProductMaster(cloudMaster);
+                            setSyncStatus('success');
+                        } else {
+                            setSyncStatus('idle');
+                        }
+                    } catch (err) {
+                        console.error("Cloud fetch failed:", err);
+                        setSyncStatus('error');
+                    }
+                };
+                fetchCloudData();
+            }, []);
+
+            // --- 持久化與全量雲端同步 (Sync) ---
             useEffect(() => { localStorage.setItem('nextgen_invoices_supabase', JSON.stringify(invoices)); }, [invoices]);
             useEffect(() => { localStorage.setItem('nextgen_product_master', JSON.stringify(productMaster)); }, [productMaster]);
 
             useEffect(() => {
                 const performSync = async () => {
-                    if (invoices.length === 0) return;
+                    // 若無資料且無商品則不同步，避免清空雲端
+                    if (invoices.length === 0 && productMaster.length === 0) return; 
+                    
                     setSyncStatus('syncing');
                     const syncData = invoices.map(inv => ({ id: inv.invoiceNumber, data: { ...inv, items: inv.items || [] }, updated_at: new Date() }));
+                    
+                    // 將商品主檔打包成特殊紀錄一併上傳
+                    syncData.push({
+                        id: '__PRODUCT_MASTER__',
+                        data: { isSystemRecord: true, type: 'ProductMaster', products: productMaster },
+                        updated_at: new Date()
+                    });
+
                     const { error } = await supabase.from('invoices').upsert(syncData);
                     if (error) setSyncStatus('error');
                     else { setSyncStatus('success'); setTimeout(() => setSyncStatus('idle'), 2000); }
                 };
                 const timer = setTimeout(performSync, 1500);
                 return () => clearTimeout(timer);
-            }, [invoices]);
+            }, [invoices, productMaster]);
 
             // --- 儀表板圖表邏輯 ---
             useEffect(() => {
@@ -220,7 +258,6 @@
                 setFormData({ ...formData, items, netAmount, tax, total: netAmount + tax });
             };
 
-            // 新增：應用商品主檔資料到品項
             const applyProductToItem = (idx, product) => {
                 const items = [...formData.items];
                 items[idx].name = product.name;
@@ -238,20 +275,17 @@
                 e.preventDefault();
                 if (!formData.invoiceNumber.match(/^[A-Z]{2}-\d{8}$/)) return showToast("發票格式錯誤 (AA-12345678)");
                 
-                // 動態主檔學習引擎 (Auto-learning Master Data)
                 const newMaster = [...productMaster];
                 let isMasterUpdated = false;
                 formData.items.forEach(it => {
                     if (!it.name) return;
                     const existingIdx = newMaster.findIndex(p => p.name === it.name);
                     if (existingIdx >= 0) {
-                        // 若價格或規格有變，自動更新主檔
                         if (newMaster[existingIdx].unitPrice != it.unitPrice || newMaster[existingIdx].specs !== it.specs) {
                             newMaster[existingIdx] = { ...newMaster[existingIdx], unitPrice: parseFloat(it.unitPrice)||0, specs: it.specs };
                             isMasterUpdated = true;
                         }
                     } else {
-                        // 新商品自動建檔
                         newMaster.push({ id: generateItemId(), name: it.name, specs: it.specs, unitPrice: parseFloat(it.unitPrice)||0 });
                         isMasterUpdated = true;
                     }
@@ -259,11 +293,39 @@
                 if (isMasterUpdated) setProductMaster(newMaster);
 
                 setInvoices([{ ...formData, id: Date.now().toString() }, ...invoices.filter(i => i.invoiceNumber !== formData.invoiceNumber)]);
-                showToast("數據存檔成功，商品主檔已同步更新");
+                showToast("數據存檔成功，商品主檔已同步至雲端");
                 setFormData({ ...formData, invoiceNumber: '', taxId: '', vendorName: '', items: [], netAmount: 0, tax: 0, total: 0 });
             };
 
             const handleFormKeyDown = (e) => { if (e.key === 'Enter') e.preventDefault(); };
+
+            // --- 商品主檔管理邏輯 ---
+            const handleAddProduct = (e) => {
+                e.preventDefault();
+                if (!newProductForm.name) return showToast('請填寫商品名稱');
+                if (productMaster.some(p => p.name === newProductForm.name)) return showToast('此商品名稱已存在');
+                
+                setProductMaster([{
+                    id: generateItemId(),
+                    name: newProductForm.name,
+                    specs: newProductForm.specs,
+                    unitPrice: parseFloat(newProductForm.unitPrice) || 0
+                }, ...productMaster]);
+                
+                setNewProductForm({ name: '', specs: '', unitPrice: '' });
+                showToast('商品建檔成功並已同步');
+            };
+
+            const exportProductsCSV = () => {
+                const headers = ['系統ID', '商品/服務名稱', '規格描述', '預設單價'];
+                const csvRows = [headers.join(',')];
+                productMaster.forEach(p => {
+                    csvRows.push([p.id, `"${(p.name||'').replace(/"/g,'""')}"`, `"${(p.specs||'').replace(/"/g,'""')}"`, p.unitPrice].join(','));
+                });
+                const blob = new Blob(['\uFEFF' + csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+                const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `商品主檔資料庫_${new Date().toISOString().split('T')[0]}.csv`; a.click();
+            };
+
 
             const exportCSV = () => {
                 const filtered = invoices.filter(i => {
@@ -299,7 +361,10 @@
                                 const cols = parseCSVLine(l);
                                 return cols[dataIdx] ? JSON.parse(cols[dataIdx]) : null;
                             }).filter(i => i);
-                            setInvoices(imported);
+                            
+                            // 過濾掉商品主檔記錄，只還原發票
+                            const importedInvoices = imported.filter(i => !i.isSystemRecord);
+                            setInvoices(importedInvoices);
                             showToast("資料還原成功");
                             return;
                         }
@@ -333,6 +398,7 @@
 
             return (
                 <div className="flex flex-col md:flex-row h-screen bg-slate-50 overflow-hidden relative">
+                    {/* 左側導航列 */}
                     <aside className="hidden md:flex w-72 bg-slate-900 text-slate-300 flex-col shadow-2xl flex-shrink-0">
                         <div className="p-8 border-b border-slate-800 text-center">
                             <h1 className="text-xl font-black text-white italic tracking-tighter">NEXTGEN FINANCE</h1>
@@ -342,14 +408,15 @@
                             <button onClick={() => setActiveTab('dashboard')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all ${activeTab === 'dashboard' ? 'bg-indigo-600 text-white shadow-lg' : 'hover:bg-slate-800'}`}><i className="ph ph-chart-pie"></i> 戰情儀表板</button>
                             <button onClick={() => setActiveTab('entry')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all ${activeTab === 'entry' ? 'bg-indigo-600 text-white shadow-lg' : 'hover:bg-slate-800'}`}><i className="ph ph-plus-circle"></i> 進銷項錄入</button>
                             <button onClick={() => setActiveTab('list')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all ${activeTab === 'list' ? 'bg-indigo-600 text-white shadow-lg' : 'hover:bg-slate-800'}`}><i className="ph ph-list-dashes"></i> 整合明細清單</button>
+                            <button onClick={() => setActiveTab('products')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all ${activeTab === 'products' ? 'bg-indigo-600 text-white shadow-lg' : 'hover:bg-slate-800 text-indigo-300'}`}><i className="ph ph-database"></i> 商品主檔庫</button>
                         </nav>
                         <div className="p-6 mt-auto border-t border-slate-800 text-center">
                             <div className="bg-slate-800 rounded-2xl p-4 flex flex-col items-center justify-center gap-2">
                                 <div className="flex items-center gap-2">
                                     <div className={`w-2.5 h-2.5 rounded-full ${syncStatus === 'syncing' ? 'bg-amber-400 animate-pulse' : syncStatus === 'error' ? 'bg-red-500' : 'bg-emerald-500'}`}></div>
-                                    <span className="text-[10px] font-bold text-slate-400">SUPABASE SECURE</span>
+                                    <span className="text-[10px] font-bold text-slate-400">SUPABASE CLOUD SYNC</span>
                                 </div>
-                                <div className="text-[10px] font-bold text-indigo-400 mt-1"><i className="ph ph-database"></i> 商品庫已建檔: {productMaster.length} 筆</div>
+                                <div className="text-[10px] font-bold text-emerald-400 mt-1"><i className="ph ph-cloud-check"></i> 主檔同步: {productMaster.length} 筆</div>
                             </div>
                         </div>
                     </aside>
@@ -360,12 +427,12 @@
                         {activeTab === 'help' && (
                             <div className="max-w-4xl mx-auto space-y-8 animate-slide-in">
                                 <header className="bg-indigo-900 p-12 rounded-[3.5rem] text-white shadow-2xl text-center">
-                                    <h2 className="text-4xl font-black mb-4">自動化建檔引擎 5.0</h2>
-                                    <p className="text-indigo-200 text-lg font-medium italic">「打字交給系統，您的精力應該放在分析。」</p>
+                                    <h2 className="text-4xl font-black mb-4">全雲端漫遊版 6.0</h2>
+                                    <p className="text-indigo-200 text-lg font-medium italic">「打破硬體限制，商品資料庫與發票全線上同步。」</p>
                                 </header>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                                    <div className="bg-white p-8 rounded-[2rem] border shadow-sm"><h4 className="font-black text-indigo-700 mb-3 flex items-center gap-2"><i className="ph ph-magic-wand text-2xl"></i> 商品主檔智能連動</h4><p className="text-sm text-slate-500 leading-relaxed font-medium">在輸入商品時，系統會自動比對主檔庫，提供下拉選單。點擊後一秒補齊規格與單價，徹底消滅重複的鍵盤敲擊。</p></div>
-                                    <div className="bg-white p-8 rounded-[2rem] border shadow-sm"><h4 className="font-black text-emerald-700 mb-3 flex items-center gap-2"><i className="ph ph-brain text-2xl"></i> 自我學習，預留接口</h4><p className="text-sm text-slate-500 leading-relaxed font-medium">當您輸入全新的商品並存檔時，系統會默默將它加入商品庫。這份獨立架構，未來隨時可開放 API 與其他 ERP / 庫存系統無縫對接。</p></div>
+                                    <div className="bg-white p-8 rounded-[2rem] border shadow-sm"><h4 className="font-black text-indigo-700 mb-3 flex items-center gap-2"><i className="ph ph-cloud-arrow-up text-2xl"></i> 無感雲端建檔黑科技</h4><p className="text-sm text-slate-500 leading-relaxed font-medium">系統會自動將您的商品主檔打包隱藏在現有的資料庫中。您不需要登入 Supabase 建立新資料表，現在就能享受跨裝置商品同步。</p></div>
+                                    <div className="bg-white p-8 rounded-[2rem] border shadow-sm"><h4 className="font-black text-emerald-700 mb-3 flex items-center gap-2"><i className="ph ph-database text-2xl"></i> 專屬主檔管理後台</h4><p className="text-sm text-slate-500 leading-relaxed font-medium">新增了「商品主檔庫」分頁。您可以在那裡綜觀全局，手動建檔，或是一鍵匯出商品清單，為未來的 ERP 串接做好萬全準備。</p></div>
                                 </div>
                             </div>
                         )}
@@ -380,7 +447,7 @@
                                     <div className="bg-white p-6 rounded-3xl border shadow-sm"><div className="text-xs font-bold text-slate-400">總銷項金額 (營收)</div><div className="text-3xl font-black mt-1 text-indigo-600">${invoices.filter(i=>i.transactionType!=='進項'&&i.status!=='void').reduce((s,i)=>s+(i.total||0),0).toLocaleString()}</div></div>
                                     <div className="bg-white p-6 rounded-3xl border shadow-sm"><div className="text-xs font-bold text-slate-400">總進項金額 (成本)</div><div className="text-3xl font-black mt-1 text-red-500">${invoices.filter(i=>i.transactionType==='進項'&&i.status!=='void').reduce((s,i)=>s+(i.total||0),0).toLocaleString()}</div></div>
                                     <div className="bg-slate-900 p-6 rounded-3xl shadow-xl text-white"><div className="text-xs font-bold text-slate-400">預計淨營業稅額</div><div className="text-3xl font-black mt-1 text-emerald-400">${(invoices.filter(i=>i.transactionType!=='進項'&&i.status!=='void').reduce((s,i)=>s+(i.tax||0),0) - invoices.filter(i=>i.transactionType==='進項'&&i.status!=='void').reduce((s,i)=>s+(i.tax||0),0)).toLocaleString()}</div></div>
-                                    <div className="bg-indigo-50 p-6 rounded-3xl border border-indigo-100"><div className="text-xs font-bold text-indigo-400">商品主檔庫存 (預備對接)</div><div className="text-3xl font-black mt-1 text-indigo-800 flex items-center gap-2"><i className="ph ph-database"></i> {productMaster.length} <span className="text-sm">項</span></div></div>
+                                    <div className="bg-indigo-50 p-6 rounded-3xl border border-indigo-100"><div className="text-xs font-bold text-indigo-400">雲端商品庫存</div><div className="text-3xl font-black mt-1 text-indigo-800 flex items-center gap-2"><i className="ph ph-database"></i> {productMaster.length} <span className="text-sm">項</span></div></div>
                                 </div>
                                 <div className="bg-white p-10 rounded-[3rem] border shadow-sm h-96"><h4 className="font-black text-slate-800 text-lg mb-6 flex items-center gap-2"><i className="ph ph-chart-line text-indigo-500"></i> 收支對比趨勢 (Monthly Trend)</h4><div className="h-72"><canvas ref={chartRefs.trend}></canvas></div></div>
                                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
@@ -423,19 +490,21 @@
                                                             {/* 品名輸入與自動完成選單 */}
                                                             <input 
                                                                 type="text" 
-                                                                placeholder="輸入商品關鍵字自動搜尋..." 
+                                                                placeholder="輸入商品關鍵字自動從雲端搜尋..." 
                                                                 value={it.name} 
                                                                 onChange={e => handleItemChange(i, 'name', e.target.value)} 
                                                                 onFocus={() => setFocusedItemIndex(i)}
                                                                 onBlur={() => setTimeout(() => setFocusedItemIndex(null), 200)}
-                                                                className="bg-transparent text-sm font-black outline-none border-b border-transparent focus:border-indigo-500 transition-all placeholder:font-medium" 
+                                                                className="bg-transparent text-sm font-black outline-none border-b border-transparent focus:border-indigo-500 transition-all placeholder:font-medium text-indigo-900" 
                                                             />
-                                                            {/* 智慧下拉選單 (Autocomplete) */}
                                                             {focusedItemIndex === i && it.name && (
                                                                 <div className="absolute top-full left-0 mt-2 w-full bg-white border border-slate-200 shadow-2xl rounded-2xl z-50 max-h-56 overflow-y-auto custom-scrollbar animate-slide-in">
-                                                                    <div className="text-[10px] font-black text-slate-400 p-3 bg-slate-50 border-b border-slate-100 uppercase tracking-widest sticky top-0">從主檔庫選擇快速帶入</div>
+                                                                    <div className="text-[10px] font-black text-slate-400 p-3 bg-slate-50 border-b border-slate-100 uppercase tracking-widest sticky top-0 flex justify-between">
+                                                                        <span>從雲端主檔庫帶入</span>
+                                                                        <span className="text-indigo-400"><i className="ph-fill ph-cloud-check"></i></span>
+                                                                    </div>
                                                                     {productMaster.filter(p => p.name.toLowerCase().includes(it.name.toLowerCase())).length === 0 ? (
-                                                                        <div className="p-4 text-xs text-slate-400 italic font-bold">新商品！儲存後將自動加入主檔庫。</div>
+                                                                        <div className="p-4 text-xs text-slate-400 italic font-bold">雲端未建檔新商品！儲存後將自動學習並上傳。</div>
                                                                     ) : (
                                                                         productMaster.filter(p => p.name.toLowerCase().includes(it.name.toLowerCase())).map(p => (
                                                                             <div key={p.id} onClick={() => applyProductToItem(i, p)} className="p-4 hover:bg-indigo-50 cursor-pointer border-b border-slate-50 last:border-0 transition-colors group">
@@ -463,7 +532,7 @@
                                             </div>
                                         </div>
                                         <div className={`p-10 rounded-[3rem] text-white shadow-2xl transition-all ${formData.status==='void'?'bg-slate-700':formData.transactionType==='進項'?'bg-red-900':'bg-indigo-900'}`}><div className="flex flex-col md:flex-row justify-between items-center gap-12 font-black"><div className="flex gap-12"><div><div className="text-[10px] uppercase text-indigo-300 mb-3 tracking-widest">銷售淨額 (未稅)</div><div className="text-3xl font-mono">${(formData.netAmount||0).toLocaleString()}</div></div><div className="border-l border-white/10 pl-12"><div className="flex items-center gap-4 mb-3"><span className="text-[10px] text-indigo-300 uppercase">稅別</span><div className="flex p-0.5 bg-white/10 rounded-lg"><button type="button" onClick={()=>handleInputChange({target:{name:'taxType',value:'taxable'}})} className={`px-4 py-1 rounded-md text-[10px] ${formData.taxType==='taxable'?'bg-indigo-500 text-white':'text-indigo-200'}`}>應稅</button><button type="button" onClick={()=>handleInputChange({target:{name:'taxType',value:'exempt'}})} className={`px-4 py-1 rounded-md text-[10px] ${formData.taxType==='exempt'?'bg-indigo-500 text-white':'text-indigo-200'}`}>免稅</button></div></div><div className="text-3xl font-mono">${(formData.tax||0).toLocaleString()}</div></div></div><div className="text-right md:border-l md:border-white/10 md:pl-12 font-black"><div className="text-[10px] uppercase text-indigo-300 mb-3 tracking-widest">交易總額 (含稅)</div><div className="text-6xl text-emerald-400 font-mono tracking-tighter italic underline decoration-white/20">${(formData.total||0).toLocaleString()}</div></div></div></div>
-                                        <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 py-7 rounded-[2rem] font-black text-white text-2xl shadow-xl transition-all active:scale-[0.98] flex items-center justify-center gap-4"><i className="ph-fill ph-check-square"></i> 確認儲存並學習商品資料</button>
+                                        <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 py-7 rounded-[2rem] font-black text-white text-2xl shadow-xl transition-all active:scale-[0.98] flex items-center justify-center gap-4"><i className="ph-fill ph-cloud-arrow-up"></i> 確認儲存並學習商品資料</button>
                                     </form>
                                 </div>
                             </div>
@@ -530,12 +599,59 @@
                                 </div>
                             </div>
                         )}
+
+                        {/* 全新的商品主檔管理分頁 */}
+                        {activeTab === 'products' && (
+                            <div className="space-y-6 animate-slide-in">
+                                <header className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6 mb-8">
+                                    <div>
+                                        <h2 className="text-3xl font-black text-slate-800 tracking-tight italic">雲端商品主檔庫</h2>
+                                        <p className="text-slate-500 font-bold text-sm mt-2 flex items-center gap-2"><i className="ph-fill ph-cloud-check text-emerald-500"></i> 與 Supabase 實時同步中</p>
+                                    </div>
+                                    <div className="flex gap-4">
+                                        <button onClick={exportProductsCSV} className="bg-indigo-600 text-white px-8 py-3 rounded-2xl font-black flex items-center gap-2 shadow-lg text-xs hover:bg-indigo-700 transition-all"><i className="ph ph-download"></i> 導出 API 用 CSV</button>
+                                    </div>
+                                </header>
+
+                                {/* 手動新增商品區塊 */}
+                                <div className="bg-white rounded-[2rem] border border-slate-200 p-8 shadow-sm mb-8">
+                                    <h4 className="font-black text-slate-800 mb-6 flex items-center gap-2"><i className="ph ph-plus-circle text-indigo-500 text-xl"></i> 手動建檔</h4>
+                                    <form onSubmit={handleAddProduct} className="flex flex-col md:flex-row gap-4 items-end">
+                                        <div className="flex-1 space-y-1 w-full"><label className="text-[10px] font-black text-slate-400 uppercase">商品/服務名稱</label><input type="text" required value={newProductForm.name} onChange={e=>setNewProductForm({...newProductForm, name: e.target.value})} className="w-full px-5 py-3 rounded-xl border focus:border-indigo-500 outline-none font-bold text-sm" placeholder="例：顧問服務包" /></div>
+                                        <div className="flex-1 space-y-1 w-full"><label className="text-[10px] font-black text-slate-400 uppercase">規格描述</label><input type="text" value={newProductForm.specs} onChange={e=>setNewProductForm({...newProductForm, specs: e.target.value})} className="w-full px-5 py-3 rounded-xl border focus:border-indigo-500 outline-none text-sm" placeholder="例：10小時/月" /></div>
+                                        <div className="w-full md:w-48 space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase">預設單價 (未稅)</label><input type="number" required value={newProductForm.unitPrice} onChange={e=>setNewProductForm({...newProductForm, unitPrice: e.target.value})} className="w-full px-5 py-3 rounded-xl border focus:border-indigo-500 outline-none font-mono text-sm" placeholder="0" /></div>
+                                        <button type="submit" className="w-full md:w-auto bg-indigo-50 text-indigo-700 hover:bg-indigo-600 hover:text-white px-8 py-3.5 rounded-xl font-black transition-all flex items-center justify-center gap-2 text-sm"><i className="ph-fill ph-floppy-disk"></i> 加入主檔</button>
+                                    </form>
+                                </div>
+
+                                {/* 商品主檔清單 */}
+                                <div className="bg-white rounded-[3rem] border border-slate-200 overflow-hidden shadow-sm">
+                                    <table className="w-full text-left">
+                                        <thead className="bg-slate-50 text-[10px] font-black text-slate-400 tracking-widest border-b uppercase">
+                                            <tr><th className="p-6">商品/服務名稱</th><th className="p-6">規格描述</th><th className="p-6 text-right font-black">預設單價 (未稅)</th><th className="p-6 text-center">操作</th></tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100">
+                                            {productMaster.map(p => (
+                                                <tr key={p.id} className="hover:bg-slate-50 transition-all group">
+                                                    <td className="p-6 font-black text-indigo-900">{p.name}</td>
+                                                    <td className="p-6 text-sm text-slate-500 italic">{p.specs || '-'}</td>
+                                                    <td className="p-6 text-right font-black font-mono text-lg text-slate-700">${(p.unitPrice||0).toLocaleString()}</td>
+                                                    <td className="p-6 text-center"><button onClick={() => { setProductMaster(productMaster.filter(item => item.id !== p.id)); showToast("已從主檔庫移除", "success"); }} className="text-slate-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"><i className="ph-fill ph-trash-simple text-2xl"></i></button></td>
+                                                </tr>
+                                            ))}
+                                            {productMaster.length === 0 && <tr><td colSpan="4" className="p-16 text-center text-slate-400 font-bold italic">目前尚無商品主檔，請於錄入發票時自動學習或手動建檔。</td></tr>}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
                     </main>
                     <nav className="md:hidden fixed bottom-0 w-full bg-white border-t p-4 z-50 flex justify-around shadow-2xl pb-safe">
-                        <button onClick={()=>setActiveTab('help')} className={activeTab==='help'?'text-indigo-600':'text-slate-400'}><i className="ph ph-info text-3xl"></i></button>
-                        <button onClick={()=>setActiveTab('dashboard')} className={activeTab==='dashboard'?'text-indigo-600':'text-slate-400'}><i className="ph ph-chart-pie text-3xl"></i></button>
-                        <button onClick={()=>setActiveTab('entry')} className={activeTab==='entry'?'text-indigo-600':'text-slate-400'}><i className="ph ph-plus-circle text-3xl"></i></button>
-                        <button onClick={()=>setActiveTab('list')} className={activeTab==='list'?'text-indigo-600':'text-slate-400'}><i className="ph ph-list-dashes text-3xl"></i></button>
+                        <button onClick={()=>setActiveTab('help')} className={activeTab==='help'?'text-indigo-600':'text-slate-400'}><i className="ph ph-info text-2xl"></i></button>
+                        <button onClick={()=>setActiveTab('dashboard')} className={activeTab==='dashboard'?'text-indigo-600':'text-slate-400'}><i className="ph ph-chart-pie text-2xl"></i></button>
+                        <button onClick={()=>setActiveTab('entry')} className={activeTab==='entry'?'text-indigo-600':'text-slate-400'}><i className="ph ph-plus-circle text-2xl"></i></button>
+                        <button onClick={()=>setActiveTab('list')} className={activeTab==='list'?'text-indigo-600':'text-slate-400'}><i className="ph ph-list-dashes text-2xl"></i></button>
+                        <button onClick={()=>setActiveTab('products')} className={activeTab==='products'?'text-indigo-600':'text-slate-400'}><i className="ph ph-database text-2xl"></i></button>
                     </nav>
                 </div>
             );
